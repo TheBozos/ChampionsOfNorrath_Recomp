@@ -10,5 +10,5 @@ mkdir -p build/recomp-staging "$GENERATED"
 sed 's|^output = .*|output = "build/recomp-staging/"|' "$CONFIG" > build/recomp-staging.toml
 "$TOOLS_BUILD/ps2xRecomp/ps2_recomp" build/recomp-staging.toml
 
-changed=$(rsync -rc --delete --out-format='%n' build/recomp-staging/ "$GENERATED/" | grep -vc '/$' || true)
+changed=$(rsync -rc --delete --exclude=/iop/ --out-format='%n' build/recomp-staging/ "$GENERATED/" | grep -vc '/$' || true)
 echo "Generated $(find "$GENERATED" -maxdepth 1 -name '*.cpp' | wc -l) sources in $GENERATED ($changed changed)"
