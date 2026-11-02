@@ -1,0 +1,10 @@
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+GAME_DIR="$ROOT/game"
+ELF="$GAME_DIR/SLUS_205.65"
+CONFIG="$ROOT/recomp/con.toml"
+GENERATED="$ROOT/generated"
+TOOLS_BUILD="$ROOT/build/tools"
+GAME_BUILD="$ROOT/build/game"
+JOBS="${JOBS:-$(nproc)}"
