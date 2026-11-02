@@ -1,9 +1,35 @@
 #include "game_overrides.h"
 #include "ps2_runtime.h"
 
+#include <cstdlib>
+
 namespace
 {
     constexpr uint32_t kConEntry = 0x00100008u;
+
+    void setEnvDefault(const char *name, const char *value)
+    {
+        if (std::getenv(name))
+        {
+            return;
+        }
+#ifdef _WIN32
+        _putenv_s(name, value);
+#else
+        setenv(name, value, 0);
+#endif
+    }
+
+    const bool g_nativeDefaults = []
+    {
+        setEnvDefault("PS2X_GS_RENDERER", "native");
+        setEnvDefault("PS2X_IOP_NATIVE", "1");
+        setEnvDefault("PS2X_IOP_WALLCLOCK", "1");
+        setEnvDefault("PS2X_SPU2_WALLCLOCK", "1");
+        setEnvDefault("PS2X_NATIVE_AUDIO", "1");
+        setEnvDefault("PS2X_IOP_HARDWARE", "0");
+        return true;
+    }();
 
     constexpr uint32_t kLgKbMInit = 0x002E6ED0u;
     constexpr uint32_t kLgKbMPrepareForRebootIOP = 0x002E6D70u;
