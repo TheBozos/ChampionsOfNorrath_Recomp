@@ -265,10 +265,6 @@ stubs = [
   "Copy@0x002DFB78",
   "GetEntryAddress@0x002DFBC0",
   "InitTLB@0x002DFD68",
-  "sceSdRemoteInit@0x002E0320",
-  "sceSdTransToIOP@0x002E03D0",
-  "sceSdCallBack@0x002E0458",
-  "sceSdRemote@0x002E0478",
   "sceMcInit@0x002E0B90",
   "sceMcEnd@0x002E0D60",
   "sceMcChangeThreadPriority@0x002E0DF0",
@@ -706,8 +702,6 @@ entry_points = [
   "_kTLBException@0x002DFFC0",
   "_kExitTLBHandler@0x002E0100",
   "_kDebugException@0x002E0200",
-  "sceSdRemoteCallbackInit@0x002E0800",
-  "sceSdRemoteCallbackQuit@0x002E08F0",
   "_sdrCBThread@0x002E0A28",
   "_sdrCB@0x002E0A98",
   "_lmcGetClientPtr@0x002E0DB0",
@@ -2191,6 +2185,15 @@ entry_points = [
 
 # Legacy compatibility field. The analyzer no longer auto-populates skip entries.
 skip = []
+
+native = [
+  "sceSdRemoteInit@0x002E0320",
+  "sceSdTransToIOP@0x002E03D0",
+  "sceSdCallBack@0x002E0458",
+  "sceSdRemote@0x002E0478",
+  "sceSdRemoteCallbackInit@0x002E0800",
+  "sceSdRemoteCallbackQuit@0x002E08F0",
+]
 
 # Detected MMIO accesses
 [mmio]
