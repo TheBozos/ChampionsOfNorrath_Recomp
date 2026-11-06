@@ -7,7 +7,7 @@ Not an emulator: the game's own MIPS R5900 code, rebuilt as a native program, dr
 
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-1b8cff)
 ![Compiler](https://img.shields.io/badge/compiler-Clang-1b8cff)
-![Based on](https://img.shields.io/badge/based%20on-PS2Recomp-17a35b)
+![Based on](https://img.shields.io/badge/based%20on-BozoEngine-17a35b)
 ![Status](https://img.shields.io/badge/status-bring--up-c0392b)
 
 </div>
@@ -22,26 +22,26 @@ Not an emulator: the game's own MIPS R5900 code, rebuilt as a native program, dr
 
 ## Status
 
-**Bring-up, started 2026-11-02.** The disc extracts (both layers of the DVD9), the game's code recompiles to about
-16,100 C++ functions and the first runner is being built. It does not boot yet.
+**Bring-up. It runs headless, and it draws nothing yet.** With a scripted pad, `con-headless` goes through the start-up
+screens and into levels for 6,000 frames with no fault, which the game's own log shows (`to level intro`, `to level
+kelsel`). There is no window and no picture, and the sound has not been listened to.
 
-The port targets PS2Recomp's native route from the first day, like *Twisted Metal: Black*: no emulated GS, VU or
-IOP hardware, nothing drawn from GS, GIF or VIF packets. Textures and models that the disc only holds as ready-made
-GS and VIF data are converted once from your own disc into native packs in the build tree, never committed.
+Everything runs native, with no emulated GS, VU or IOP hardware and nothing read from GS, GIF or VIF packets.
 
 | Layer | State |
 |---|---|
 | Disc extraction, both layers | ✅ |
-| EE code recompiled | 🔧 generated, first build |
-| Boot to the title screen | ⏳ |
-| IOP modules as native code (`tools/iop_recomp.py`) | ⏳ |
-| Sound: native mixer at libsd's API, no SPU2 | ⏳ |
-| Frame loop on the PC clock, no vblank pacing | ⏳ |
-| 3D: native meshes and textures from packs converted from the disc | ⏳ |
-| 2D, menus and HUD: the game's builders in C++ | ⏳ |
+| EE code recompiled | ✅ |
+| Start-up, memory card, multitap, into a level, headless | ✅ |
+| VU0 programs as native C++ | ✅ (no reference run to compare against) |
+| The disc's sound modules as native code over native libsd | 🔧 run; output not checked |
+| Frame loop on the PC clock, no vblank pacing | ⏳ comes with the window |
+| Textures: native decoder reading the disc's `.TEX` files at run time | 🔧 timed, not wired in |
+| 3D: native meshes | ⏳ |
+| 2D, menus and HUD | ⏳ |
 | Movies | ⏳ |
-| No GS front end | ⏳ |
-| Windows build | ⏳ |
+| Window | ⏳ |
+| Windows build | ⏳ not tried |
 
 ✅ works · 🔧 in progress · ⏳ not reached yet
 
@@ -54,34 +54,28 @@ higher internal resolution. Online play is out of scope.
 ## How it works
 
 ```
-disc files ──► ps2_analyzer (the ELF's own symbol table) ──► recomp/con.toml
-                                           │
-                                ps2_recomp ──► C++ (one file per function)
-                                           │
-   PS2Recomp runtime: EE kernel HLE · native renderer · native mixer ─┼─► ps2EntryRunner
-   PS2Recomp IOP:     the game's own IRX, recompiled (generated/iop/)
+disc ELF ──► bozo-recomp (the ELF's own symbol table) ──► C++ in the build tree
+disc IRX ──► BozoEngine tools/native_irx ─────────────► C++ in the build tree
+                                                              │
+   BozoEngine: native kernel · native Sony libraries · native libsd ─┼─► con-headless
+   runtime/:   CoN's overrides, native VU0 programs, sound wiring ───┘
 ```
 
 - The ELF keeps its symbol table (about 21,000 symbols), so the functions are named from the start.
-- PS2Recomp turns every function into C++. The game's draw and sound paths are then taken over by native code fed
-  from the game's own state, in `runtime/`.
-- `runtime/con_overrides.cpp` holds the game-specific bindings.
+- `bozo-recomp` turns the game's code into C++. BozoEngine answers Sony's libraries natively by name.
+- Instructions that only reach graphics hardware are listed in `runtime/con_graphics.cpp` and replaced before they
+  run; retired graphics registers fault if anything else reaches them.
+- SDRDRV, LIBSD and HELLO are translated from your disc at build time and run on BozoEngine's compiled-library host.
 
-The runtime is the `PS2Recomp/` git submodule: [TheBozos/PS2Recomp](https://github.com/TheBozos/PS2Recomp), branch
-`con/ps2-disc-dual-layer` (`native/renderer` plus the dual-layer disc reader), the fork shared with the *Twisted
-Metal: Black*, *Soulcalibur III*, *Valkyrie Profile 2: Silmeria*, *The Lord of the Rings: The Third Age*, *Dark Cloud*
-and *Drakengard* recompilations. The top-level `CMakeLists.txt` builds its runtime, swaps its placeholder function
-table for the generated one and links the generated code, `runtime/` and the recompiled IOP modules into
-`ps2EntryRunner`. Every fix made for this port that is not specific to the game goes to the shared fork.
+The engine is the `BozoEngine/` git submodule: [TheBozos/BozoEngine](https://github.com/TheBozos/BozoEngine). Fixes made
+for this port that are not specific to the game go there.
 
 ## Requirements
 
-- Linux (developed on Arch) or Windows 10/11 with [MSYS2](https://www.msys2.org/) (UCRT64, see [Windows](#windows))
-- CMake 3.21+, Ninja, Clang with C++20 (or MSYS2's GCC on Windows), rsync, Python 3
-- FFmpeg development libraries (`libavcodec`, `libavformat`, `libavutil`, `libswresample`, `libswscale`)
-- X11/Wayland and OpenGL development headers (raylib is fetched and built by the runtime)
-- An OpenGL 4.5 driver (any recent NVIDIA, AMD or Intel driver)
-- Your own copy of `SLUS-20565` as a disc image (the extracted ELF is checked against the hash above)
+- Linux (developed on Arch). Windows is the goal, but not tried yet.
+- CMake 3.21+, Ninja, Clang or GCC with C++20, Python 3
+- FFmpeg development libraries for BozoEngine's movie decoder (`BOZO_FFMPEG_ROOT` names a folder of them)
+- Your own copy of `SLUS-20565` as a disc image
 
 ## Build and run
 
@@ -89,43 +83,16 @@ table for the generated one and links the generated code, `runtime/` and the rec
 git clone --recurse-submodules https://github.com/TheBozos/ChampionsOfNorrath_Recomp.git
 cd ChampionsOfNorrath_Recomp
 scripts/extract_iso.sh "/path/to/Champions of Norrath (USA).iso"   # disc files, both layers -> game/
-scripts/build_tools.sh                                              # ps2_recomp, ps2_analyzer -> build/tools
-scripts/recomp.sh                                                   # SLUS_205.65 + recomp/con.toml -> generated/
-scripts/build_runtime.sh                                            # runtime + generated code -> build/game (RelWithDebInfo)
-scripts/run.sh                                                      # ps2EntryRunner game/SLUS_205.65
+cmake -S . -B build/bozo -G Ninja -DCON_ELF="$PWD/game/SLUS_205.65" -DBOZO_BUILD_TOOLS=OFF
+cmake --build build/bozo --target con-headless
+build/bozo/con-headless --elf game/SLUS_205.65 --iso game/disc.iso --frames 3000 --print
 ```
 
-The extracted disc folder is the game's `cdrom0:`. `scripts/analyze.sh` regenerates `recomp/con.toml` from the ELF
-(it overwrites hand edits: diff before committing). `JOBS=<n>` sets the build parallelism of every script (default:
-all cores). `scripts/build_runtime.sh Release` or `Debug` picks another build type, and `CXX` another compiler.
+The run prints what the game logs and why it stopped. Without input it stays in the start-up screens; `--pad-script`
+takes a frame-keyed script (`frame:BUTTON/frames`, with upper-case button names, such as `300:START/8`).
 
-`scripts/remote_tools.sh` and `scripts/remote_build.sh` build the tools and the runner on another x86-64 Linux
-machine over ssh (`REMOTE_HOST`, default `stallman`) and copy them back to `build/`; the game still runs locally.
-The remote host needs rsync, mise and the X11 and OpenGL development headers; the local FFmpeg headers and libraries
-are copied over once, so the runner links against the FFmpeg it runs with.
-
-### Saves, settings and logs
-
-| | Linux | Windows |
-|---|---|---|
-| User folder | `$XDG_DATA_HOME/championsofnorrath_recomp` (`~/.local/share/championsofnorrath_recomp`) | `%APPDATA%\ChampionsOfNorrath_Recomp` |
-
-It holds the memory cards (`mc0/`, `mc1/`), the controls (`input.ini`), the video settings (`video.ini`) and the log
-of the last runs (`logs/`). `PS2X_USER_DIR=<dir>` uses another folder, `PS2X_LOG_FILE=<file>` writes the log there
-(`0`: no log file), and `PS2X_NO_DIALOGS=1` keeps the message boxes in the log only, for unattended runs.
-
-### Windows
-
-The same scripts run in an MSYS2 **UCRT64** shell, with MSYS2's GCC (MSVC is not supported):
-
-```bash
-pacman -S --needed mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,pkgconf,ffmpeg,python} git rsync
-git clone --recurse-submodules https://github.com/TheBozos/ChampionsOfNorrath_Recomp.git
-```
-
-Then follow the steps above. `scripts/build_runtime.sh` ends with `scripts/stage_dlls.sh`, which copies the DLLs the
-runner needs (compiler runtime, FFmpeg and their dependencies) from the MSYS2 prefix next to `ps2EntryRunner.exe`,
-so it also starts outside the MSYS2 shell. `scripts/remote_tools.sh` and `scripts/remote_build.sh` are Linux only.
+`scripts/remote_bozo_build.sh` builds on another x86-64 Linux machine over ssh (`REMOTE_HOST`, default `stallman`) and
+copies the program back.
 
 ## Disc facts
 
@@ -142,18 +109,22 @@ so it also starts outside the MSYS2 shell. `scripts/remote_tools.sh` and `script
 
 | Path | Contents |
 |---|---|
-| `PS2Recomp/` | The recompiler and runtime (git submodule, TheBozos/PS2Recomp branch `con/ps2-disc-dual-layer`) |
-| `CMakeLists.txt` | Builds the runtime with the generated code and the game overrides linked in |
-| `recomp/` | Recompiler config (`con.toml`) |
-| `runtime/` | Game override module (`con_overrides.cpp`) |
-| `scripts/` | Extract, analyze, recompile, build (local and remote) and run scripts |
-| `game/`, `generated/`, `build/` | Created by the scripts, ignored by git: disc files, generated C++, builds |
+| `BozoEngine/` | The recompiler and runtime (git submodule, TheBozos/BozoEngine) |
+| `CMakeLists.txt`, `cmake/bozo.cmake` | Generate the game's code and link it with `runtime/` |
+| `bozo/` | The runner (`con_headless.cpp`) |
+| `recomp/` | Functions left as stubs for the overrides (`con_stubs.txt`) |
+| `runtime/` | The game's overrides, native graphics list, VU0 programs and sound wiring |
+| `tools/` | Override list and IOP module image generators |
+| `scripts/` | Disc extraction and the remote build |
+| `game/`, `build/` | Created by the steps above, ignored by git: disc files, generated C++, builds |
 
 Everything derived from the game (disc files, generated code, builds, logs) stays outside this repository.
 Never commit or redistribute it.
 
 ## Credits
 
-- [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors (GPL), the recompiler and runtime this port is built on.
-- [TheBozos/PS2Recomp](https://github.com/TheBozos/PS2Recomp) and the *Twisted Metal: Black*, *Soulcalibur III*, *Valkyrie Profile 2: Silmeria*, *The Lord of the Rings: The Third Age*, *Dark Cloud* and *Drakengard* recompilations developed on it; runtime fixes are shared both ways.
+- **The Bozos**: boubou666 and Arzaroth ([RecompWatcher](https://thebozos.github.io/RecompWatcher/) shows our projects).
+- [BozoEngine](https://github.com/TheBozos/BozoEngine), The Bozos' MIT recompiler and native runtime, this port's engine.
+- [PS2Recomp](https://github.com/ran-j/PS2Recomp) by ran-j and contributors (GPL-3.0), on which the port's first bring-up was built.
+- The [Return to Arms research](https://github.com/Open-Champions/champions-return-to-arms-re) (MIT) for the engine's file formats.
 - *Champions of Norrath* © Sony Online Entertainment, developed by Snowblind Studios. This is an unofficial fan project, not affiliated with or endorsed by them.

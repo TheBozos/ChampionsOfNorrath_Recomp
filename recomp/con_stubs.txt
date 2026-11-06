@@ -1,0 +1,34 @@
+# Functions of SLUS_205.65 the BozoEngine build answers itself (bozo-externals --stubs): the Logitech USB keyboard
+# (lgKbM*) and headset (lgAud*) libraries, whose IOP drivers need a USB host the PC port does not model.
+# runtime/con_overrides.cpp answers them: no keyboard, no headset.
+lgAudARead
+lgAudASync
+lgAudAWrite
+lgAudAWriteVag
+lgAudClose
+lgAudDeInit
+lgAudEnumerate
+lgAudEnumHint
+lgAudGetAvailableRecordingBytes
+lgAudGetMixer
+lgAudGetRemainingPlaybackBytes
+lgAudInit
+lgAudOpen
+lgAudPrepareForReboot
+lgAudRead
+lgAudResumePlayback
+lgAudSetMixer
+lgAudSetPlaybackVolume
+lgAudSetRecordingVolume
+lgAudStartPlayback
+lgAudStartRecording
+lgAudStopPlayback
+lgAudStopRecording
+lgAudWrite
+lgAudWriteVag
+lgKbMChangeThreadPriority
+lgKbMInit
+lgKbMPrepareForRebootIOP
+lgKbMResumeThread
+lgKbMSuspendThread
+lgKbMUnloadIopModule

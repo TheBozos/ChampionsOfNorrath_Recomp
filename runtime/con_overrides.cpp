@@ -1,72 +1,74 @@
-#include "game_overrides.h"
-#include "ps2_runtime.h"
+#include "bozo/context.h"
+#include "bozo/port.h"
 
-#include <cstdlib>
+#include <cstdint>
+#include <cstring>
+
+namespace con::graphics
+{
+    void install(bozo::port::Registry &runtime);
+}
+
+namespace con::vu0
+{
+    void install(bozo::port::Registry &runtime);
+}
 
 namespace
 {
     constexpr uint32_t kConEntry = 0x00100008u;
-
-    void setEnvDefault(const char *name, const char *value)
-    {
-        if (std::getenv(name))
-        {
-            return;
-        }
-#ifdef _WIN32
-        _putenv_s(name, value);
-#else
-        setenv(name, value, 0);
-#endif
-    }
-
-    const bool g_nativeDefaults = []
-    {
-        setEnvDefault("PS2X_GS_RENDERER", "native");
-        setEnvDefault("PS2X_IOP_NATIVE", "1");
-        setEnvDefault("PS2X_IOP_WALLCLOCK", "1");
-        setEnvDefault("PS2X_SPU2_WALLCLOCK", "1");
-        setEnvDefault("PS2X_NATIVE_AUDIO", "1");
-        setEnvDefault("PS2X_IOP_HARDWARE", "0");
-        return true;
-    }();
+    constexpr uint32_t kInitVif = 0x0018F118u;
 
     constexpr uint32_t kLgKbMInit = 0x002E6ED0u;
-    constexpr uint32_t kLgKbMPrepareForRebootIOP = 0x002E6D70u;
-    constexpr uint32_t kLgAudInit = 0x002E9098u;
-    constexpr uint32_t kLgAudPrepareForReboot = 0x002E9B08u;
-    constexpr uint32_t kLgAudDeInit = 0x002EA080u;
+    constexpr uint32_t kLgAudEnumHint = 0x002EA150u;
+    constexpr uint32_t kLgReturnZero[] = {
+        0x002E6D70u, 0x002E7070u, 0x002E70F8u, 0x002E7138u, 0x002E7188u, 0x002E9098u, 0x002E9550u, 0x002E96B8u,
+        0x002E9828u, 0x002E9998u, 0x002E9B08u, 0x002E9BF8u, 0x002E9D70u, 0x002E9EF8u, 0x002EA080u, 0x002EA1C0u,
+        0x002EA380u, 0x002EA448u, 0x002EA520u, 0x002EA5F8u, 0x002EA718u, 0x002EA830u, 0x002EA8F8u, 0x002EA9C0u,
+        0x002EAA88u, 0x002EAB50u, 0x002EAC18u, 0x002EAD10u, 0x002EAE08u};
 
-    void disableLogitechKeyboard(PS2Runtime &runtime)
+    void returnFrom(R5900Context *ctx, int32_t value)
     {
-        ps2_game_overrides::bindAddressHandler(runtime, kLgKbMInit, "ret1");
-        ps2_game_overrides::bindAddressHandler(runtime, kLgKbMPrepareForRebootIOP, "ret0");
+        setReturnS32(ctx, value);
+        ctx->pc = getRegU32(ctx, 31);
     }
 
-    void disableLogitechHeadset(PS2Runtime &runtime)
+    void returnZero(uint8_t *, R5900Context *ctx, Runtime *)
     {
-        ps2_game_overrides::bindAddressHandler(runtime, kLgAudInit, "ret0");
-        ps2_game_overrides::bindAddressHandler(runtime, kLgAudPrepareForReboot, "ret0");
-        ps2_game_overrides::bindAddressHandler(runtime, kLgAudDeInit, "ret0");
+        returnFrom(ctx, 0);
     }
 
-    void readDiscBySector()
+    void returnVoid(uint8_t *, R5900Context *ctx, Runtime *)
     {
-        PS2Runtime::IoPaths paths = PS2Runtime::getIoPaths();
-        if (paths.cdImage.empty())
+        ctx->pc = getRegU32(ctx, 31);
+    }
+
+    void keyboardAbsent(uint8_t *, R5900Context *ctx, Runtime *)
+    {
+        returnFrom(ctx, 1);
+    }
+
+    void headsetHintNone(uint8_t *rdram, R5900Context *ctx, Runtime *)
+    {
+        const uint32_t out = getRegU32(ctx, 4);
+        if (out)
         {
-            paths.cdImage = paths.cdRoot / "disc.iso";
+            const uint32_t none = 0;
+            std::memcpy(rdram + (out & 0x01FFFFFCu), &none, sizeof(none));
         }
-        paths.cdImageFileSystem = true;
-        PS2Runtime::setIoPaths(paths);
+        returnFrom(ctx, 0);
     }
 
-    void applyCon(PS2Runtime &runtime)
+    void install(bozo::port::Registry &runtime)
     {
-        readDiscBySector();
-        disableLogitechKeyboard(runtime);
-        disableLogitechHeadset(runtime);
+        con::graphics::install(runtime);
+        con::vu0::install(runtime);
+        runtime.registerFunction(kInitVif, &returnVoid);
+        runtime.registerFunction(kLgKbMInit, &keyboardAbsent);
+        runtime.registerFunction(kLgAudEnumHint, &headsetHintNone);
+        for (uint32_t address : kLgReturnZero)
+            runtime.registerFunction(address, &returnZero);
     }
 }
 
-PS2_REGISTER_GAME_OVERRIDE("Champions of Norrath (USA)", "SLUS_205.65", kConEntry, 0u, &applyCon)
+BOZO_PORT("Champions of Norrath (USA)", "SLUS_205.65", kConEntry, &install)
