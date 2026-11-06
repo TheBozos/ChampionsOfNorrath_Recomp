@@ -25,6 +25,8 @@ rsync -aL --delete --exclude=.git --exclude='/BozoEngine/build*/' \
     "$ROOT/CMakeLists.txt" "$ROOT/cmake" "$ROOT/bozo" "$ROOT/runtime" "$ROOT/recomp" "$ROOT/tools" "$ROOT/BozoEngine" \
     "$HOST:$RDIR/$NAME/src/"
 rsync -t "$ELF" "$HOST:$RDIR/$NAME/game/SLUS_205.65"
+ssh "$HOST" mkdir -p "$RDIR/$NAME/game/BG/0MOD"
+rsync -t "$(dirname "$ELF")/BG/0MOD/"{LIBSD,SDRDRV,HELLO}.IRX "$HOST:$RDIR/$NAME/game/BG/0MOD/"
 
 echo "== build on $HOST"
 args=$(printf '%q ' "$RDIR" "$NAME" "$TOOLS" "${TARGETS[@]}")

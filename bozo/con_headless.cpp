@@ -3,6 +3,7 @@
 //
 //   con-headless [--frames n] [--elf SLUS_205.65] [--iso image] [--pad-script [n=]file]... [--card-dir dir]
 //                [--report n] [--print] [--quiet] [--no-sound]
+#include "con_audio.h"
 #include "con_functions.h"
 
 #include "bozo/app/determinism.h"
@@ -94,6 +95,7 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "con-headless: %s\n", error.c_str());
         return 2;
     }
+    con::audio::attach(host.libraries());
     std::printf("con-headless: %s, %zu overrides, ELF %s, disc %s\n", port->title, registry.functions().size(),
                 opt.elf.c_str(), opt.iso.c_str());
 
