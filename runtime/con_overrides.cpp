@@ -9,6 +9,11 @@ namespace con::graphics
     void install(bozo::port::Registry &runtime);
 }
 
+namespace con::vu0
+{
+    void install(bozo::port::Registry &runtime);
+}
+
 namespace
 {
     constexpr uint32_t kConEntry = 0x00100008u;
@@ -57,6 +62,7 @@ namespace
     void install(bozo::port::Registry &runtime)
     {
         con::graphics::install(runtime);
+        con::vu0::install(runtime);
         runtime.registerFunction(kInitVif, &returnVoid);
         runtime.registerFunction(kLgKbMInit, &keyboardAbsent);
         runtime.registerFunction(kLgAudEnumHint, &headsetHintNone);
