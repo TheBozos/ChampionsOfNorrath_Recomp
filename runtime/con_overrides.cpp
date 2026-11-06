@@ -4,9 +4,15 @@
 #include <cstdint>
 #include <cstring>
 
+namespace con::graphics
+{
+    void install(bozo::port::Registry &runtime);
+}
+
 namespace
 {
     constexpr uint32_t kConEntry = 0x00100008u;
+    constexpr uint32_t kInitVif = 0x0018F118u;
 
     constexpr uint32_t kLgKbMInit = 0x002E6ED0u;
     constexpr uint32_t kLgAudEnumHint = 0x002EA150u;
@@ -27,6 +33,11 @@ namespace
         returnFrom(ctx, 0);
     }
 
+    void returnVoid(uint8_t *, R5900Context *ctx, Runtime *)
+    {
+        ctx->pc = getRegU32(ctx, 31);
+    }
+
     void keyboardAbsent(uint8_t *, R5900Context *ctx, Runtime *)
     {
         returnFrom(ctx, 1);
@@ -45,6 +56,8 @@ namespace
 
     void install(bozo::port::Registry &runtime)
     {
+        con::graphics::install(runtime);
+        runtime.registerFunction(kInitVif, &returnVoid);
         runtime.registerFunction(kLgKbMInit, &keyboardAbsent);
         runtime.registerFunction(kLgAudEnumHint, &headsetHintNone);
         for (uint32_t address : kLgReturnZero)
