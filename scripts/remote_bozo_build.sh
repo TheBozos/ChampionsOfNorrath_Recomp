@@ -6,7 +6,7 @@
 #   REMOTE_NAME  name of this tree's sources and build there (default bozo)
 #   REMOTE_TOOLS mise tools the build runs with (default: latest cmake and ninja, Clang 23.1.4 from conda-forge)
 # The ELF is copied next to the sources on the host (game data: keep the host private, delete the tree after use).
-# FFmpeg comes from this machine (<REMOTE_DIR>/ffmpeg, as scripts/remote_build.sh stages it).
+# FFmpeg must already be on the host, in <REMOTE_DIR>/ffmpeg (include/, lib/).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ELF="$1"
