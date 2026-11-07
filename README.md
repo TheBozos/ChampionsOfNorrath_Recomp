@@ -32,14 +32,14 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 |---|---|
 | Disc extraction, both layers | ✅ |
 | EE code recompiled | ✅ |
-| Start-up, memory card, multitap, into a level, headless | ✅ |
+| Start-up, memory card, multitap, the front-end, headless | ✅ |
 | VU0 programs as native C++ | ✅ (no reference run to compare against) |
 | The disc's sound modules as native code over native libsd | 🔧 the mixer makes sound from about 18 s in a run; nobody has listened to it |
-| A window held to real time | 🔧 runs into a level at 60 frames a second |
+| A window held to real time | 🔧 runs at 60 frames a second, as far as character creation |
 | Frame loop on the PC clock, no vblank pacing | 🔧 frames held to the PC clock; the game's vblank waits are still there |
 | Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; not drawn yet |
 | 3D: native meshes | ⏳ |
-| 2D, menus and HUD | 🔧 `_textureDrawColor` and the font drawn natively, menus and dialogs show; the other 2D variants aren't drawn |
+| 2D, menus and HUD | 🔧 the game's sprite and font calls drawn natively, menus and dialogs show; untextured 2D and fades aren't drawn |
 | Movies | ⏳ |
 | Window | ⏳ |
 | Windows build | ⏳ not tried |
