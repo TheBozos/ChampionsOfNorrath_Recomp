@@ -45,6 +45,7 @@ set(gen_dir "${CMAKE_BINARY_DIR}/con_gen")
 set(overrides_list "${gen_dir}/con_overrides.txt")
 set(externals "${gen_dir}/con_externals.txt")
 file(GLOB CON_RUNTIME_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/*.cpp")
+list(REMOVE_ITEM CON_RUNTIME_SOURCES "${CMAKE_SOURCE_DIR}/runtime/con_textures.cpp")
 
 add_custom_command(
     OUTPUT ${overrides_list}
@@ -118,9 +119,15 @@ target_compile_options(con_iop PRIVATE -w)
 
 add_library(con_runtime OBJECT ${CON_RUNTIME_SOURCES})
 target_include_directories(con_runtime PUBLIC "${CMAKE_SOURCE_DIR}/runtime" ${gen_dir})
-target_link_libraries(con_runtime PUBLIC bozo_port bozo_render bozo_libs bozo_runtime_core)
+target_link_libraries(con_runtime PUBLIC con_textures bozo_port bozo_render bozo_libs bozo_runtime_core)
 add_dependencies(con_runtime con_generated)
 
 add_executable(con-headless bozo/con_headless.cpp)
 target_link_libraries(con-headless PRIVATE con_runtime con_generated con_iop bozo_host)
 target_compile_definitions(con-headless PRIVATE BOZO_RUN_DEFAULT_ELF="${CON_ELF}")
+
+add_library(con_textures OBJECT runtime/con_textures.cpp)
+target_include_directories(con_textures PUBLIC "${CMAKE_SOURCE_DIR}/runtime")
+target_link_libraries(con_textures PUBLIC bozo_libs bozo_render)
+add_executable(con-textures-tests EXCLUDE_FROM_ALL tests/con_textures_tests.cpp)
+target_link_libraries(con-textures-tests PRIVATE con_textures bozo_libs bozo_render)
