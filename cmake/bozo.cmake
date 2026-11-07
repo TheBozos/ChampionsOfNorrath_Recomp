@@ -129,5 +129,7 @@ target_compile_definitions(con-headless PRIVATE BOZO_RUN_DEFAULT_ELF="${CON_ELF}
 add_library(con_textures OBJECT runtime/con_textures.cpp)
 target_include_directories(con_textures PUBLIC "${CMAKE_SOURCE_DIR}/runtime")
 target_link_libraries(con_textures PUBLIC bozo_libs bozo_render)
+add_executable(con-tex-check EXCLUDE_FROM_ALL bozo/con_tex_check.cpp)
+target_link_libraries(con-tex-check PRIVATE con_textures bozo_libs bozo_render)
 add_executable(con-textures-tests EXCLUDE_FROM_ALL tests/con_textures_tests.cpp)
 target_link_libraries(con-textures-tests PRIVATE con_textures bozo_libs bozo_render)
