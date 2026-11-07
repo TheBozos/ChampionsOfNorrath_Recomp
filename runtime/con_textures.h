@@ -27,6 +27,9 @@ namespace con::textures
         std::map<uint32_t, std::unique_ptr<Tables>> tables_;
     };
 
+    // A lump's texture as the game holds it in memory: its 0x80-byte header, then the upload the file stores.
+    bool decodeLump(const uint8_t *rdram, uint32_t address, bozo::render::Texture &out);
+
     class Level
     {
     public:

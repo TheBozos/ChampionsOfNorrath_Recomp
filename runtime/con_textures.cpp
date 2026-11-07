@@ -337,6 +337,153 @@ namespace con::textures
         }
     }
 
+    namespace
+    {
+        constexpr uint32_t kRamBytes = 0x2000000u;
+        constexpr uint16_t kRelocated = 0xa7fb;
+        constexpr uint32_t kT32 = 0x00, kT8 = 0x13, kT4 = 0x14;
+
+        struct Upload
+        {
+            uint32_t format = 0, x = 0, y = 0, width = 0, height = 0;
+            size_t data = 0;
+        };
+
+        bool readUploads(Bytes memory, size_t at, size_t end, std::vector<Upload> &uploads)
+        {
+            Upload current;
+            while (at + 16 <= end) {
+                if (!memory.has(at, 16))
+                    return false;
+                uint64_t tag;
+                std::memcpy(&tag, memory.data + at, 8);
+                at += 16;
+                const uint32_t loops = uint32_t(tag & 0x7fff), kind = uint32_t(tag >> 58) & 3, registers = uint32_t(tag >> 60) & 15;
+                if (kind == 0) {
+                    const size_t entries = size_t(loops) * (registers ? registers : 16);
+                    if (!memory.has(at, entries * 16))
+                        return false;
+                    for (size_t i = 0; i < entries; ++i, at += 16) {
+                        uint64_t value, id;
+                        std::memcpy(&value, memory.data + at, 8);
+                        std::memcpy(&id, memory.data + at + 8, 8);
+                        if ((id & 0xff) == 0x50)
+                            current.format = uint32_t(value >> 56) & 63;
+                        else if ((id & 0xff) == 0x51) {
+                            current.x = uint32_t(value >> 32) & 0x7ff;
+                            current.y = uint32_t(value >> 48) & 0x7ff;
+                        } else if ((id & 0xff) == 0x52) {
+                            current.width = uint32_t(value) & 0xfff;
+                            current.height = uint32_t(value >> 32) & 0xfff;
+                        }
+                    }
+                } else if (kind == 2) {
+                    if (!memory.has(at, size_t(loops) * 16))
+                        return false;
+                    current.data = at;
+                    uploads.push_back(current);
+                    at += size_t(loops) * 16;
+                } else {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Which texel of its 16x16 block byte k of an 8x8 block of 32-bit pixels is, as x + 16 * y.
+        std::array<uint8_t, 256> makeBlockTexels()
+        {
+            std::array<uint8_t, 256> table{};
+            size_t k = 0;
+            for (uint32_t row = 0; row < 8; ++row)
+                for (uint32_t column = 0; column < 8; ++column)
+                    for (uint32_t byte = 0; byte < 4; ++byte) {
+                        const uint32_t p = ((row >> 1) & 3) * 64 + ((column >> 1) & 3) * 16 + (row & 1) * 8 + (column & 1) * 4 + byte;
+                        const uint32_t word = p >> 2;
+                        const uint32_t low = ((word & 2) >> 1) | ((p & 1) << 1);
+                        const uint32_t x = ((word & 1) | ((word & 0xc) >> 1) | ((p & 2) << 2)) ^ ((((p >> 6) & 1) ^ (low >> 1)) << 2);
+                        const uint32_t y = (((p >> 6) & 3) << 2) | low;
+                        table[k++] = uint8_t(x + 16 * y);
+                    }
+            return table;
+        }
+    }
+
+    bool decodeLump(const uint8_t *rdram, uint32_t address, bozo::render::Texture &out)
+    {
+        static const std::array<uint8_t, 256> blockTexels = makeBlockTexels();
+        const Bytes memory{rdram, kRamBytes};
+        address &= kRamBytes - 1;
+        if (!memory.has(address, 0x40))
+            return false;
+        const uint32_t width = memory.u16(address), height = memory.u16(size_t(address) + 2);
+        const uint32_t qwords = memory.u16(size_t(address) + 6);
+        const uint32_t format = (memory.u32(size_t(address) + 0xc) >> 6) & 63;
+        uint32_t payload = memory.u32(size_t(address) + 0x10);
+        payload = memory.u16(size_t(address) + 0xa) == kRelocated ? payload & (kRamBytes - 1) : address + payload;
+        std::vector<Upload> uploads;
+        if (!width || !height || !readUploads(memory, payload, size_t(payload) + size_t(qwords) * 16, uploads) || uploads.empty())
+            return false;
+
+        out.width = width;
+        out.height = height;
+        out.rgba.assign(size_t(width) * height, 0);
+        const auto rows = [&](const Upload &u, auto &&texel) {
+            for (uint32_t y = 0; y < u.height; ++y)
+                for (uint32_t x = 0; x < u.width; ++x)
+                    if (u.x + x < width && u.y + y < height)
+                        texel(x, y, out.rgba[size_t(u.y + y) * width + u.x + x]);
+        };
+
+        if (format == kT32) {
+            const Upload &u = uploads[0];
+            if (!memory.has(u.data, size_t(u.width) * u.height * 4))
+                return false;
+            rows(u, [&](uint32_t x, uint32_t y, uint32_t &pixel) { pixel = memory.u32(u.data + (size_t(y) * u.width + x) * 4); });
+            return true;
+        }
+        if ((format != kT8 && format != kT4) || uploads.size() < 2)
+            return false;
+        const Upload &colours = uploads[0];
+        const uint32_t entries = format == kT8 ? 256 : 16;
+        if (!memory.has(colours.data, entries * 4))
+            return false;
+        std::array<uint32_t, 256> palette{};
+        for (uint32_t i = 0; i < entries; ++i)
+            palette[i] = memory.u32(colours.data + (format == kT8 ? clutOrder(i) : i) * 4);
+        out.rgba.assign(size_t(width) * height, palette[0]);
+
+        for (size_t n = 1; n < uploads.size(); ++n) {
+            const Upload &u = uploads[n];
+            if (format == kT8 && u.format == kT32) {
+                if (!memory.has(u.data, size_t(u.width) * u.height * 4))
+                    return false;
+                for (uint32_t y = 0; y < u.height; ++y)
+                    for (uint32_t x = 0; x < u.width; ++x) {
+                        const uint32_t px = u.x + x, py = u.y + y;
+                        const uint32_t block = ((py & 7) * 8 + (px & 7)) * 4;
+                        for (uint32_t byte = 0; byte < 4; ++byte) {
+                            const uint32_t texel = blockTexels[block + byte];
+                            const uint32_t tx = (px >> 3) * 16 + (texel & 15), ty = (py >> 3) * 16 + (texel >> 4);
+                            if (tx < width && ty < height)
+                                out.rgba[size_t(ty) * width + tx] = palette[memory.data[u.data + (size_t(y) * u.width + x) * 4 + byte]];
+                        }
+                    }
+            } else if (format == kT4 && u.format == kT4) {
+                if (!memory.has(u.data, (size_t(u.width) * u.height + 1) / 2))
+                    return false;
+                rows(u, [&](uint32_t x, uint32_t y, uint32_t &pixel) {
+                    const size_t at = size_t(y) * u.width + x;
+                    const uint8_t byte = memory.data[u.data + at / 2];
+                    pixel = palette[at & 1 ? byte >> 4 : byte & 15];
+                });
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool Level::open(const std::string &image, const std::string &name, std::string &error)
     {
         static std::atomic<uint64_t> serial{0};
