@@ -96,11 +96,11 @@ namespace con::graphics
             }
         }
 
-        void drawWaitFinished(uint8_t *, R5900Context *ctx, Runtime *rt)
+        void drawWaitFinished(uint8_t *rdram, R5900Context *ctx, Runtime *rt)
         {
             if (bozo::port::realTime(rt))
                 holdToRealTime(ctx, rt);
-            con::overlay::endFrame();
+            con::overlay::endFrame(rdram, ctx);
             bozo::port::frameEnd(rt, ctx);
             g_frameEndCycle = bozo::port::now(rt);
             ctx->pc = getRegU32(ctx, 31);
