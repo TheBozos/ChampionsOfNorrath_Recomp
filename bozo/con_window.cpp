@@ -6,6 +6,7 @@
 //       [--print] [--no-sound] [--audio-latency ms] [--audio-stats] [--wav file]
 #include "con_audio.h"
 #include "con_functions.h"
+#include "con_world.h"
 
 #include "bozo/app/app.h"
 #include "bozo/app/audio_device.h"
@@ -196,6 +197,7 @@ int main(int argc, char **argv)
         };
 
     bozo::render::Renderer::instance().setEnabled(true);
+    con::world::setDiscImage(opt.iso);
 
     bozo::app::Game game;
     game.run = [&]
