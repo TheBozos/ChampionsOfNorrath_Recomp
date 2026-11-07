@@ -34,8 +34,9 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 | EE code recompiled | ✅ |
 | Start-up, memory card, multitap, into a level, headless | ✅ |
 | VU0 programs as native C++ | ✅ (no reference run to compare against) |
-| The disc's sound modules as native code over native libsd | 🔧 run; output not checked |
-| Frame loop on the PC clock, no vblank pacing | ⏳ comes with the window |
+| The disc's sound modules as native code over native libsd | 🔧 the mixer makes sound from about 18 s in a run; nobody has listened to it |
+| A window on the host's clock | 🔧 runs into a level; the picture is black |
+| Frame loop on the PC clock, no vblank pacing | ⏳ still paced by vblank |
 | Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; not drawn yet |
 | 3D: native meshes | ⏳ |
 | 2D, menus and HUD | ⏳ |
@@ -88,6 +89,8 @@ cmake --build build/bozo --target con-headless
 build/bozo/con-headless --elf game/SLUS_205.65 --iso game/disc.iso --frames 3000 --print
 ```
 
+For the window, configure with `-DCON_WINDOW=ON` and build the `con` target. It takes `--iso`, or `disc.iso` beside the ELF.
+
 The run prints what the game logs and why it stopped. Without input it stays in the start-up screens; `--pad-script`
 takes a frame-keyed script (`frame:BUTTON/frames`, with upper-case button names, such as `300:START/8`).
 
@@ -111,7 +114,7 @@ copies the program back.
 |---|---|
 | `BozoEngine/` | The recompiler and runtime (git submodule, TheBozos/BozoEngine) |
 | `CMakeLists.txt`, `cmake/bozo.cmake` | Generate the game's code and link it with `runtime/` |
-| `bozo/` | The runner (`con_headless.cpp`) and the texture check (`con_tex_check.cpp`) |
+| `bozo/` | The runners (`con_headless.cpp`, `con_window.cpp`) and the texture check (`con_tex_check.cpp`) |
 | `recomp/` | Functions left as stubs for the overrides (`con_stubs.txt`) |
 | `runtime/` | The game's overrides, native graphics list, VU0 programs, sound wiring and texture decoder |
 | `tests/` | The texture decoder on synthetic cells, no game data (`con-textures-tests`) |
