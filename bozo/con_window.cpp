@@ -18,6 +18,7 @@
 #include "bozo/ee/dispatcher.h"
 #include "bozo/host/free_host.h"
 #include "bozo/port.h"
+#include "bozo/render/renderer.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -193,6 +194,8 @@ int main(int argc, char **argv)
             device.push(samples, count);
             wav.write(samples, count);
         };
+
+    bozo::render::Renderer::instance().setEnabled(true);
 
     bozo::app::Game game;
     game.run = [&]
