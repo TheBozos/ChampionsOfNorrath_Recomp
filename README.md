@@ -36,7 +36,7 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 | VU0 programs as native C++ | ✅ (no reference run to compare against) |
 | The disc's sound modules as native code over native libsd | 🔧 run; output not checked |
 | Frame loop on the PC clock, no vblank pacing | ⏳ comes with the window |
-| Textures: native decoder reading the disc's `.TEX` files at run time | 🔧 timed, not wired in |
+| Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; not drawn yet |
 | 3D: native meshes | ⏳ |
 | 2D, menus and HUD | ⏳ |
 | Movies | ⏳ |
@@ -111,10 +111,11 @@ copies the program back.
 |---|---|
 | `BozoEngine/` | The recompiler and runtime (git submodule, TheBozos/BozoEngine) |
 | `CMakeLists.txt`, `cmake/bozo.cmake` | Generate the game's code and link it with `runtime/` |
-| `bozo/` | The runner (`con_headless.cpp`) |
+| `bozo/` | The runner (`con_headless.cpp`) and the texture check (`con_tex_check.cpp`) |
 | `recomp/` | Functions left as stubs for the overrides (`con_stubs.txt`) |
-| `runtime/` | The game's overrides, native graphics list, VU0 programs and sound wiring |
-| `tools/` | Override list and IOP module image generators |
+| `runtime/` | The game's overrides, native graphics list, VU0 programs, sound wiring and texture decoder |
+| `tests/` | The texture decoder on synthetic cells, no game data (`con-textures-tests`) |
+| `tools/` | Override list and IOP module image generators, the Python texture decoder (`con_tex.py`) |
 | `scripts/` | Disc extraction and the remote build |
 | `game/`, `build/` | Created by the steps above, ignored by git: disc files, generated C++, builds |
 

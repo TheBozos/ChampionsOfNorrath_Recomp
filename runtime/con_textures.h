@@ -1,0 +1,50 @@
+// CoN's textures, decoded at run time from the <LEVEL>.TEX files of the game's disc image. Format: tools/con_tex.py.
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "bozo/libs/cd.h"
+#include "bozo/render/texture.h"
+
+namespace con::textures
+{
+    class Cell
+    {
+    public:
+        explicit Cell(std::vector<uint8_t> bytes);
+        ~Cell();
+        uint32_t count() const;
+        // RGBA with the GS's alpha, as the renderer takes it. Texels no rectangle covers take palette entry 0.
+        bool decode(uint32_t index, bozo::render::Texture &out);
+
+    private:
+        struct Tables;
+        std::vector<uint8_t> bytes_;
+        std::map<uint32_t, std::unique_ptr<Tables>> tables_;
+    };
+
+    class Level
+    {
+    public:
+        bool open(const std::string &image, const std::string &name, std::string &error);
+        const std::vector<int32_t> &cellIds() const { return cellIds_; }
+        Cell *cell(int32_t id);
+        std::shared_ptr<const bozo::render::Texture> texture(int32_t cellId, uint32_t index);
+
+    private:
+        struct Extent
+        {
+            uint32_t offset = 0, size = 0;
+        };
+        bozo::libs::DiscImage disc_;
+        uint32_t firstSector_ = 0;
+        uint64_t serial_ = 0;
+        std::vector<int32_t> cellIds_;
+        std::map<int32_t, Extent> extents_;
+        std::map<int32_t, Cell> cells_;
+    };
+}
