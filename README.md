@@ -35,8 +35,8 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 | Start-up, memory card, multitap, into a level, headless | ✅ |
 | VU0 programs as native C++ | ✅ (no reference run to compare against) |
 | The disc's sound modules as native code over native libsd | 🔧 the mixer makes sound from about 18 s in a run; nobody has listened to it |
-| A window on the host's clock | 🔧 runs into a level; the picture is black |
-| Frame loop on the PC clock, no vblank pacing | ⏳ still paced by vblank |
+| A window held to real time | 🔧 runs into a level at 60 frames a second; the picture is black |
+| Frame loop on the PC clock, no vblank pacing | 🔧 frames held to the PC clock; the game's vblank waits are still there |
 | Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; not drawn yet |
 | 3D: native meshes | ⏳ |
 | 2D, menus and HUD | ⏳ |
