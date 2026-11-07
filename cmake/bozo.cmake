@@ -123,7 +123,7 @@ target_link_libraries(con_runtime PUBLIC con_textures bozo_port bozo_render bozo
 add_dependencies(con_runtime con_generated)
 
 add_executable(con-headless bozo/con_headless.cpp)
-target_link_libraries(con-headless PRIVATE con_runtime con_generated con_iop bozo_host)
+target_link_libraries(con-headless PRIVATE con_runtime con_textures con_generated con_iop bozo_host)
 target_compile_definitions(con-headless PRIVATE BOZO_RUN_DEFAULT_ELF="${CON_ELF}")
 
 add_library(con_textures OBJECT runtime/con_textures.cpp)
@@ -136,6 +136,6 @@ target_link_libraries(con-textures-tests PRIVATE con_textures bozo_libs bozo_ren
 
 if(CON_WINDOW)
     add_executable(con bozo/con_window.cpp)
-    target_link_libraries(con PRIVATE con_runtime con_generated con_iop bozo_host bozo_app)
+    target_link_libraries(con PRIVATE con_runtime con_textures con_generated con_iop bozo_host bozo_app)
     target_compile_definitions(con PRIVATE BOZO_RUN_DEFAULT_ELF="${CON_ELF}")
 endif()

@@ -9,6 +9,11 @@ namespace con::graphics
     void install(bozo::port::Registry &runtime);
 }
 
+namespace con::overlay
+{
+    void install(bozo::port::Registry &runtime);
+}
+
 namespace con::vu0
 {
     void install(bozo::port::Registry &runtime);
@@ -62,6 +67,7 @@ namespace
     void install(bozo::port::Registry &runtime)
     {
         con::graphics::install(runtime);
+        con::overlay::install(runtime);
         con::vu0::install(runtime);
         runtime.registerFunction(kInitVif, &returnVoid);
         runtime.registerFunction(kLgKbMInit, &keyboardAbsent);

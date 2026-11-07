@@ -1,4 +1,6 @@
 // CoN's hardware-only output instructions: no consumer exists natively, so they are replaced before they reach MMIO.
+#include "con_overlay.h"
+
 #include "bozo/app/frame_pacer.h"
 #include "bozo/context.h"
 #include "bozo/port.h"
@@ -98,6 +100,7 @@ namespace con::graphics
         {
             if (bozo::port::realTime(rt))
                 holdToRealTime(ctx, rt);
+            con::overlay::endFrame();
             bozo::port::frameEnd(rt, ctx);
             g_frameEndCycle = bozo::port::now(rt);
             ctx->pc = getRegU32(ctx, 31);

@@ -158,6 +158,63 @@ namespace
         check(out.rgba.size() == 256 && out.rgba[255] == 0x80123456u, "a zero-length code gives its one colour");
     }
 
+    void gifTag(std::vector<uint8_t> &out, uint64_t loops, uint64_t kind, uint64_t registers)
+    {
+        const size_t at = out.size();
+        put<uint64_t>(out, at, loops | kind << 58 | registers << 60);
+        put<uint64_t>(out, at + 8, 0x0e);
+    }
+
+    void gifRegister(std::vector<uint8_t> &out, uint64_t value, uint64_t id)
+    {
+        const size_t at = out.size();
+        put<uint64_t>(out, at, value);
+        put<uint64_t>(out, at + 8, id);
+    }
+
+    void upload(std::vector<uint8_t> &out, uint64_t format, uint32_t x, uint32_t y, uint32_t width, uint32_t height,
+                const std::vector<uint8_t> &data)
+    {
+        gifTag(out, 3, 0, 1);
+        gifRegister(out, format << 56, 0x50);
+        gifRegister(out, uint64_t(x) << 32 | uint64_t(y) << 48, 0x51);
+        gifRegister(out, uint64_t(width) | uint64_t(height) << 32, 0x52);
+        gifTag(out, (data.size() + 15) / 16, 2, 0);
+        append(out, data);
+        out.resize((out.size() + 15) / 16 * 16);
+    }
+
+    void lumpFourBit()
+    {
+        constexpr uint32_t address = 0x1000;
+        std::vector<uint8_t> packet;
+        std::vector<uint8_t> colours(64);
+        put<uint32_t>(colours, 3 * 4, 0x80112233u);
+        put<uint32_t>(colours, 5 * 4, 0x80445566u);
+        upload(packet, 0, 0, 0, 8, 2, colours);
+        upload(packet, 0x14, 0, 0, 2, 1, {0x53});
+
+        std::vector<uint8_t> ram(0x2000000);
+        put<uint16_t>(ram, address, 4);
+        put<uint16_t>(ram, address + 2, 2);
+        put<uint16_t>(ram, address + 6, uint16_t(packet.size() / 16));
+        put<uint16_t>(ram, address + 8, 0x2000);
+        put<uint32_t>(ram, address + 0xc, 0x14u << 6);
+        put<uint32_t>(ram, address + 0x10, 0x80);
+        std::memcpy(ram.data() + address + 0x80, packet.data(), packet.size());
+
+        bozo::render::Texture out;
+        check(con::textures::decodeLump(ram.data(), address, out), "a 4-bit lump texture decodes");
+        check(out.width == 4 && out.height == 2 && out.rgba[0] == 0x80112233u && out.rgba[1] == 0x80445566u, "low nibble first");
+
+        put<uint16_t>(ram, address + 0xa, 0xa7fb);
+        put<uint32_t>(ram, address + 0x10, address + 0x80);
+        check(con::textures::decodeLump(ram.data(), address, out), "a relocated pointer is absolute");
+
+        put<uint32_t>(ram, address + 0xc, 0x02u << 6);
+        check(!con::textures::decodeLump(ram.data(), address, out), "a format with no decoder is refused");
+    }
+
     std::vector<uint8_t> tileCell(const std::vector<uint32_t> &codes)
     {
         constexpr uint32_t payload = 0x80, shared = 0x100;
@@ -225,6 +282,7 @@ int main()
     vqTexture();
     vqOneColour();
     tileTexture();
+    lumpFourBit();
     std::printf(failures ? "%d failed\n" : "ok\n", failures);
     return failures ? 1 : 0;
 }
