@@ -1,5 +1,6 @@
 // CoN's hardware-only output instructions: no consumer exists natively, so they are replaced before they reach MMIO.
 #include "con_overlay.h"
+#include "con_world.h"
 
 #include "bozo/app/frame_pacer.h"
 #include "bozo/context.h"
@@ -19,6 +20,8 @@ namespace con::graphics
             0x0015f914u, 0x0015f918u, 0x0015fa30u, 0x0015fa34u,
             // engineInit: T1_MODE (an hblank line counter only movies read).
             0x00190874u,
+            // drawWorldPolyset's geometry path, drawn natively (the function then exits, $5 = 0 being no texture cell).
+            0x00179c00u,
             // Native presentation owns the display: engineInit's and vblankHandler's PMODE, DISPFB, DISPLAY, SMODE2.
             0x001902d4u, 0x00190480u, 0x0019058cu, 0x00190640u, 0x0019064cu, 0x0019069cu, 0x001906a4u, 0x001906acu,
             0x001906b4u,
@@ -54,7 +57,7 @@ namespace con::graphics
         constexpr std::array<uint32_t, 9> kChcrReads = {0x0015f7a4u, 0x0015f7c4u, 0x0015f7e4u, 0x0015f940u, 0x0015f968u,
                                                         0x0015f988u, 0x001907e4u, 0x00190800u, 0x00190820u};
 
-        bool instruction(uint8_t *, R5900Context *ctx, Runtime *rt, uint32_t pc)
+        bool instruction(uint8_t *ram, R5900Context *ctx, Runtime *rt, uint32_t pc)
         {
             if (!std::binary_search(kSorted.begin(), kSorted.end(), pc))
                 return false;
@@ -64,6 +67,10 @@ namespace con::graphics
                 setRegU64(ctx, 3, 0);
             else if (pc == 0x0015efe4u || pc == 0x0015f068u)
                 setRegU64(ctx, 2, 0);
+            else if (pc == 0x00179c00u) {
+                con::world::drawChunk(ram, ctx);
+                setRegU64(ctx, 5, 0);
+            }
             else if (pc == 0x0016f764u)
                 setRegU64(ctx, 5, 0);
             return true;
@@ -100,6 +107,7 @@ namespace con::graphics
         {
             if (bozo::port::realTime(rt))
                 holdToRealTime(ctx, rt);
+            con::world::endFrame();
             con::overlay::endFrame(rdram, ctx);
             bozo::port::frameEnd(rt, ctx);
             g_frameEndCycle = bozo::port::now(rt);

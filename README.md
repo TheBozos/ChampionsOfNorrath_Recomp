@@ -32,13 +32,13 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 |---|---|
 | Disc extraction, both layers | ✅ |
 | EE code recompiled | ✅ |
-| Start-up, memory card, multitap, the front-end, headless | ✅ |
+| Start-up, memory card, multitap, the front-end, into a hub level | ✅ |
 | VU0 programs as native C++ | ✅ (no reference run to compare against) |
 | The disc's sound modules as native code over native libsd | 🔧 the mixer makes sound from about 18 s in a run; nobody has listened to it |
-| A window held to real time | 🔧 runs at 60 frames a second, as far as character creation |
+| A window held to real time | 🔧 runs at 60 frames a second, into the hub level Kelethin |
 | Frame loop on the PC clock, no vblank pacing | 🔧 frames held to the PC clock; the game's vblank waits are still there |
-| Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; not drawn yet |
-| 3D: native meshes | ⏳ |
+| Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; drawn on the level's geometry |
+| 3D: native meshes | 🔧 the level's geometry draws with the game's camera; models, water, particles and dynamic lights don't |
 | 2D, menus and HUD | 🔧 the game's sprite and font calls drawn natively, menus and dialogs show; untextured 2D and fades aren't drawn |
 | Movies | ⏳ |
 | Window | ⏳ |
@@ -116,7 +116,7 @@ copies the program back.
 | `CMakeLists.txt`, `cmake/bozo.cmake` | Generate the game's code and link it with `runtime/` |
 | `bozo/` | The runners (`con_headless.cpp`, `con_window.cpp`) and the texture check (`con_tex_check.cpp`) |
 | `recomp/` | Functions left as stubs for the overrides (`con_stubs.txt`) |
-| `runtime/` | The game's overrides, native graphics list, VU0 programs, sound wiring and texture decoder |
+| `runtime/` | The game's overrides, native graphics list, VU0 programs, sound wiring, texture decoder, native 2D and world drawing |
 | `tests/` | The texture decoder on synthetic cells, no game data (`con-textures-tests`) |
 | `tools/` | Override list and IOP module image generators, the Python texture decoder (`con_tex.py`) |
 | `scripts/` | Disc extraction and the remote build |
