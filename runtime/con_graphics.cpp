@@ -1,4 +1,5 @@
 // CoN's hardware-only output instructions: no consumer exists natively, so they are replaced before they reach MMIO.
+#include "bozo/app/frame_pacer.h"
 #include "bozo/context.h"
 #include "bozo/port.h"
 
@@ -68,9 +69,37 @@ namespace con::graphics
 
         constexpr uint32_t kDrawWaitFinished = 0x0015faa0u;
 
+        bozo::app::FramePacer g_pacer;
+        uint64_t g_frameEndCycle = 0;
+        uint64_t g_clockDebt = 0;
+
+        // A frame whose vblank waits accounted more than its real time leaves the EE ahead: repaid from later frames, or
+        // the EE clock, and the sound made on it, would run fast.
+        void holdToRealTime(R5900Context *ctx, Runtime *rt)
+        {
+            g_pacer.setCap(60u);
+            g_pacer.setPaced(true);
+            const uint64_t real = static_cast<uint64_t>(g_pacer.frameEnd() * static_cast<double>(bozo::port::kEeClockHz));
+            const uint64_t accounted = bozo::port::now(rt) - g_frameEndCycle;
+            if (accounted > real)
+                g_clockDebt += accounted - real;
+            else
+            {
+                uint64_t charge = real - accounted;
+                const uint64_t repaid = std::min(charge, g_clockDebt);
+                g_clockDebt -= repaid;
+                charge -= repaid;
+                if (charge)
+                    bozo::port::accountCycles(rt, ctx, charge);
+            }
+        }
+
         void drawWaitFinished(uint8_t *, R5900Context *ctx, Runtime *rt)
         {
+            if (bozo::port::realTime(rt))
+                holdToRealTime(ctx, rt);
             bozo::port::frameEnd(rt, ctx);
+            g_frameEndCycle = bozo::port::now(rt);
             ctx->pc = getRegU32(ctx, 31);
         }
     }
