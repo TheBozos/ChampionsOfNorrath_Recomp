@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -31,6 +32,7 @@ namespace con::characters
         struct Skinned
         {
             std::array<float, 3> position{};
+            std::array<float, 3> normal{};
             std::array<uint8_t, 4> joint{};
             std::array<float, 4> weight{};
             uint8_t joints = 0;
@@ -73,10 +75,14 @@ namespace con::characters
             if (!copies || !tags)
                 return;
             const uint32_t count = positions.count, base = uint32_t(model.vertices.size());
+            const Unpack &normals = u[1];
             for (uint32_t i = 0; i < count; ++i) {
                 Skinned s;
                 for (int k = 0; k < 3; ++k)
                     s.position[size_t(k)] = float(guest<int16_t>(rdram, positions.data + i * 6 + uint32_t(k) * 2)) / 16.0f;
+                if (i < normals.count)
+                    for (int k = 0; k < 3; ++k)
+                        s.normal[size_t(k)] = float(guest<int8_t>(rdram, normals.data + i * 3 + uint32_t(k))) / 127.0f;
                 model.vertices.push_back(s);
             }
             if (weights) {
@@ -262,12 +268,87 @@ namespace con::characters
     namespace
     {
         using Joints = std::array<Joint, kMaxJoints>;
+        using Vec3 = std::array<float, 3>;
+
+        // lightSetupForCharacter's set, in camera space: the two nearest point lights, the fill, the sun, the ambient.
+        struct Lights
+        {
+            std::array<Vec3, 4> direction{};
+            std::array<Vec3, 4> colour{};
+            Vec3 ambient{};
+        };
 
         struct Parent
         {
             Joints joints{};
             std::array<float, 16> matrix{};
+            Lights lights;
         };
+
+        constexpr uint32_t kLightGrid = 0x004f40f0u, kFillDirection = 0x004f40e0u, kSunDirection = 0x004f40d0u;
+        constexpr uint32_t kView = 0x0037ef00u;
+        constexpr int32_t kLightGroup = -0x3f44, kLightScale = -0x1188, kFillColour = -0x1190, kSunColour = -0x1198,
+                          kAmbientColour = -0x11a0;
+
+        Vec3 colourAt(const uint8_t *rdram, uint32_t address, float scale = 1.0f)
+        {
+            return {float(guest<int16_t>(rdram, address)) * scale, float(guest<int16_t>(rdram, address + 2)) * scale,
+                    float(guest<int16_t>(rdram, address + 4)) * scale};
+        }
+
+        Lights lightsAt(const uint8_t *rdram, uint32_t gp, const Vec3 &at)
+        {
+            Lights lights;
+            const int32_t group = int32_t(guest<uint32_t>(rdram, gp + uint32_t(kLightGroup)));
+            const auto cell = [](float v, int32_t offset) { return std::clamp((int32_t(v) + offset) >> 8, 0, 0x59); };
+            std::vector<std::pair<float, uint32_t>> found;
+            for (int32_t y = cell(at[1], 0x2bd4); y <= cell(at[1], 0x2e2c); ++y)
+                for (int32_t x = cell(at[0], 0x2bd4); x <= cell(at[0], 0x2e2c); ++x)
+                    for (uint32_t light = guest<uint32_t>(rdram, kLightGrid + uint32_t(y * 90 + x) * 4); light && found.size() < 31;
+                         light = guest<uint32_t>(rdram, light)) {
+                        const float radius = guest<float>(rdram, light + 0x1c);
+                        bool inside = guest<int8_t>(rdram, light + 8) == group;
+                        float d2 = 0.0f;
+                        for (uint32_t k = 0; k < 3 && inside; ++k) {
+                            const float d = at[k] - guest<float>(rdram, light + 0x30 + k * 4);
+                            inside = std::fabs(d) <= radius;
+                            d2 += d * d;
+                        }
+                        if (inside)
+                            found.emplace_back(d2 - radius * radius, light);
+                    }
+            std::sort(found.begin(), found.end());
+            const Vec3 scale{guest<float>(rdram, gp + uint32_t(kLightScale)), guest<float>(rdram, gp + uint32_t(kLightScale) + 4),
+                             guest<float>(rdram, gp + uint32_t(kLightScale) + 8)};
+            for (size_t i = 0; i < 2 && i < found.size(); ++i) {
+                const uint32_t light = found[i].second;
+                Vec3 d{};
+                float d2 = 0.0f;
+                for (uint32_t k = 0; k < 3; ++k) {
+                    d[k] = guest<float>(rdram, light + 0x30 + k * 4) - at[k];
+                    d2 += d[k] * d[k];
+                }
+                const float radius = guest<float>(rdram, light + 0x1c);
+                const float strength = std::clamp((radius * radius - d2) * guest<float>(rdram, light + 0x20), 0.0f, 1.0f);
+                const float inverse = d2 > 0.0f ? 1.0f / std::sqrt(d2) : 0.0f;
+                Vec3 camera{};
+                for (uint32_t k = 0; k < 3; ++k)
+                    for (uint32_t c = 0; c < 3; ++c)
+                        camera[k] += d[c] * inverse * guest<float>(rdram, kView + (c * 3 + k) * 4);
+                lights.direction[i] = {camera[0], camera[1], -camera[2]};
+                const Vec3 rgb = colourAt(rdram, light + 0xa);
+                for (uint32_t k = 0; k < 3; ++k)
+                    lights.colour[i][k] = float(int32_t(rgb[k] * strength * scale[k]));
+            }
+            for (uint32_t k = 0; k < 3; ++k) {
+                lights.direction[2][k] = guest<float>(rdram, kFillDirection + k * 4);
+                lights.direction[3][k] = guest<float>(rdram, kSunDirection + k * 4);
+            }
+            lights.colour[2] = colourAt(rdram, gp + uint32_t(kFillColour));
+            lights.colour[3] = colourAt(rdram, gp + uint32_t(kSunColour));
+            lights.ambient = colourAt(rdram, gp + uint32_t(kAmbientColour));
+            return lights;
+        }
 
         std::unordered_map<uint32_t, Parent> g_parents;
 
@@ -298,7 +379,7 @@ namespace con::characters
         }
 
         void emit(const uint8_t *rdram, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
-                  const std::array<float, 16> &matrix);
+                  const std::array<float, 16> &matrix, const Lights &lights);
     }
 
     void draw(const uint8_t *rdram, const R5900Context *ctx)
@@ -306,8 +387,11 @@ namespace con::characters
         const uint32_t vif = getRegU32(ctx, 18), tex = getRegU32(ctx, 30), state = getRegU32(ctx, 19);
         Parent &parent = g_parents[vif];
         parent.joints = readPose(rdram, state);
-        std::memcpy(parent.matrix.data(), rdram + ((getRegU32(ctx, 29) + 0x20u) & kRamMask), sizeof(parent.matrix));
-        emit(rdram, vif, tex, getRegU64(ctx, 21), parent.joints, parent.matrix);
+        const uint32_t stack = getRegU32(ctx, 29);
+        std::memcpy(parent.matrix.data(), rdram + ((stack + 0x20u) & kRamMask), sizeof(parent.matrix));
+        parent.lights = lightsAt(rdram, getRegU32(ctx, 28),
+                                 {guest<float>(rdram, stack), guest<float>(rdram, stack + 4), guest<float>(rdram, stack + 8)});
+        emit(rdram, vif, tex, getRegU64(ctx, 21), parent.joints, parent.matrix, parent.lights);
     }
 
     // A part worn or held by the model drawn last with that parent: worn parts (attach slot -1) take the parent's joints,
@@ -321,7 +405,7 @@ namespace con::characters
         const Parent &parent = found->second;
         const int8_t slot = guest<int8_t>(rdram, part + 0x13);
         if (slot < 0) {
-            emit(rdram, part, tex, getRegU64(ctx, 18), parent.joints, parent.matrix);
+            emit(rdram, part, tex, getRegU64(ctx, 18), parent.joints, parent.matrix, parent.lights);
             return;
         }
         const uint32_t table = parentVif + uint32_t(guest<uint8_t>(rdram, parentVif + 0x22)) * 16u + uint32_t(slot) * 0x34u;
@@ -341,13 +425,13 @@ namespace con::characters
         }
         Joints joints;
         joints.fill(attached);
-        emit(rdram, part, tex, getRegU64(ctx, 18), joints, parent.matrix);
+        emit(rdram, part, tex, getRegU64(ctx, 18), joints, parent.matrix, parent.lights);
     }
 
     namespace
     {
     void emit(const uint8_t *rdram, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
-              const std::array<float, 16> &matrix)
+              const std::array<float, 16> &matrix, const Lights &lights)
     {
         if (!vif || !tex)
             return;
@@ -364,19 +448,39 @@ namespace con::characters
             return;
         const auto &texture = painted->texture;
 
-        std::vector<std::array<float, 3>> posed(model->vertices.size());
+        Vec3 length{};
+        for (uint32_t k = 0; k < 3; ++k) {
+            const float l = std::sqrt(matrix[k] * matrix[k] + matrix[4 + k] * matrix[4 + k] + matrix[8 + k] * matrix[8 + k]);
+            length[k] = l > 0.0f ? 0.99f / l : 0.0f;
+        }
+        std::vector<Vec3> posed(model->vertices.size());
+        std::vector<uint32_t> lit(model->vertices.size());
         for (size_t i = 0; i < model->vertices.size(); ++i) {
             const Skinned &s = model->vertices[i];
-            std::array<float, 3> out{};
+            Vec3 out{}, normal{};
             const uint8_t used = s.joints ? s.joints : 1;
             for (uint8_t k = 0; k < used; ++k) {
                 const Joint &j = joints[std::min<uint32_t>(s.joint[k], kMaxJoints - 1)];
                 const float w = s.joints ? s.weight[k] : 1.0f;
-                for (int row = 0; row < 3; ++row)
+                for (int row = 0; row < 3; ++row) {
                     out[size_t(row)] += w * (j.r[row][0] * s.position[0] + j.r[row][1] * s.position[1] +
                                              j.r[row][2] * s.position[2] + j.t[row]);
+                    normal[size_t(row)] += w * (j.r[row][0] * s.normal[0] + j.r[row][1] * s.normal[1] + j.r[row][2] * s.normal[2]);
+                }
             }
             posed[i] = out;
+            Vec3 camera{};
+            for (uint32_t k = 0; k < 3; ++k)
+                camera[k] = (matrix[k] * normal[0] + matrix[4 + k] * normal[1] + matrix[8 + k] * normal[2]) * length[k];
+            Vec3 colour = lights.ambient;
+            for (size_t l = 0; l < 4; ++l) {
+                const float facing = std::max(0.0f, lights.direction[l][0] * camera[0] + lights.direction[l][1] * camera[1] +
+                                                        lights.direction[l][2] * camera[2]);
+                for (uint32_t k = 0; k < 3; ++k)
+                    colour[k] += facing * lights.colour[l][k];
+            }
+            const auto channel = [&](uint32_t k) { return uint32_t(std::clamp(colour[k], 0.0f, 255.0f)); };
+            lit[i] = channel(0) | channel(1) << 8 | channel(2) << 16 | 0x80000000u;
         }
 
         Draw d;
@@ -396,7 +500,7 @@ namespace con::characters
                 v.z = posed[c.vertex][2];
                 v.u = c.u / width;
                 v.v = c.v / height;
-                v.rgba = 0x80808080u;
+                v.rgba = lit[c.vertex];
                 d.vertices.push_back(v);
             }
         }
