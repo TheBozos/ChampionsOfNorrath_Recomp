@@ -1,4 +1,5 @@
 // CoN's hardware-only output instructions: no consumer exists natively, so they are replaced before they reach MMIO.
+#include "con_characters.h"
 #include "con_overlay.h"
 #include "con_world.h"
 
@@ -25,6 +26,10 @@ namespace con::graphics
             0x00179c00u,
             // drawWorldObject once its model's entries are found: the model drawn natively, the load kept.
             0x001793b8u,
+            // modelDraw once the pose is built: the model skinned and drawn natively, the store kept.
+            0x0016b21cu,
+            // modelDrawAttachment before its setup: the part drawn natively with its parent's pose, the move kept.
+            0x0016c0acu,
             // Native presentation owns the display: engineInit's and vblankHandler's PMODE, DISPFB, DISPLAY, SMODE2.
             0x001902d4u, 0x00190480u, 0x0019058cu, 0x00190640u, 0x0019064cu, 0x0019069cu, 0x001906a4u, 0x001906acu,
             0x001906b4u,
@@ -70,6 +75,15 @@ namespace con::graphics
                 setRegU64(ctx, 3, 0);
             else if (pc == 0x0015efe4u || pc == 0x0015f068u)
                 setRegU64(ctx, 2, 0);
+            else if (pc == 0x0016c0acu) {
+                con::characters::drawAttachment(ram, ctx);
+                setRegU64(ctx, 4, getRegU64(ctx, 29));
+            }
+            else if (pc == 0x0016b21cu) {
+                con::characters::draw(ram, ctx);
+                const uint32_t value = getRegU32(ctx, 10);
+                std::memcpy(ram + ((getRegU32(ctx, 29) + 0x64u) & 0x1ffffffu), &value, 4);
+            }
             else if (pc == 0x001793b8u) {
                 con::world::drawModel(ram, ctx);
                 uint32_t frame;

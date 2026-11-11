@@ -1,6 +1,7 @@
 // The level's geometry chunks drawn natively: decoded once from the stored packet, with the game's camera.
 #include "con_world.h"
 
+#include "con_characters.h"
 #include "con_textures.h"
 
 #include "bozo/context.h"
@@ -392,7 +393,7 @@ namespace con::world
 
     void endFrame()
     {
-        if (g_queue.empty() && !g_published)
+        if (g_queue.empty() && !g_published && !con::characters::pending())
             return;
         auto &renderer = bozo::render::Renderer::instance();
         bozo::render::Screen screen;
@@ -402,13 +403,17 @@ namespace con::world
         screen.height = 448.0f;
         screen.depthMax = 4096.0f;
         renderer.beginFrame(screen);
-        for (const bool late : {false, true})
+        for (const bool late : {false, true}) {
             for (const Queued &queued : g_queue)
                 if (queued.mesh->late == late && !queued.mesh->vertices.empty())
                     renderer.draw(queued.mesh->material, queued.matrix.data(), queued.mesh->vertices.data(),
                                   uint32_t(queued.mesh->vertices.size()), queued.mesh->texture);
+            if (!late)
+                con::characters::submit();
+        }
         renderer.endFrame();
-        g_published = !g_queue.empty();
+        g_published = !g_queue.empty() || con::characters::pending();
+        con::characters::clear();
         g_queue.clear();
     }
 }
