@@ -225,28 +225,37 @@ namespace con::characters
         };
 
         std::unordered_map<uint64_t, std::unique_ptr<Model>> g_models;
-        std::unordered_map<uint64_t, std::shared_ptr<const bozo::render::Texture>> g_textures;
         std::vector<Draw> g_draws;
         uint32_t g_generation = 0;
 
-        std::shared_ptr<const bozo::render::Texture> textureAt(const uint8_t *rdram, uint32_t tex)
+        struct Painted
         {
-            uint64_t key = 0x43484152ull << 32 | tex;
+            std::shared_ptr<const bozo::render::Texture> texture;
+            bozo::render::Material material;
+        };
+
+        std::unordered_map<uint64_t, Painted> g_painted;
+
+        const Painted *textureAt(const uint8_t *rdram, uint32_t tex, uint64_t alpha)
+        {
+            uint64_t key = (0x43484152ull << 32 | tex) ^ alpha * 0x9e3779b97f4a7c15ull;
             for (uint32_t i = 0; i < 16; ++i)
                 key = (key ^ rdram[(tex + 0x80 + i * 32) & kRamMask]) * 0x100000001b3ull;
-            if (const auto found = g_textures.find(key); found != g_textures.end())
-                return found->second;
+            if (const auto found = g_painted.find(key); found != g_painted.end())
+                return &found->second;
             bozo::render::Texture source;
             if (!con::textures::decodeLump(rdram, tex, source) || !source.width || !source.height)
                 return nullptr;
+            Painted painted;
             auto texture = std::make_shared<bozo::render::Texture>(std::move(source));
-            for (uint32_t &texel : texture->rgba)
-                texel = (texel & 0xffffffu) | (0x80u - std::min(texel >> 24, 0x80u)) << 24;
+            con::textures::modelBlend(alpha, *texture, painted.material);
             texture->key = key;
             texture->version = 1;
-            if (g_textures.size() > 2048)
-                g_textures.clear();
-            return g_textures[key] = texture;
+            painted.material.tex0 = key;
+            painted.texture = texture;
+            if (g_painted.size() > 2048)
+                g_painted.clear();
+            return &(g_painted[key] = std::move(painted));
         }
     }
 
@@ -350,9 +359,10 @@ namespace con::characters
             model = build(rdram, vif);
         if (model->corners.empty())
             return;
-        const auto texture = textureAt(rdram, tex);
-        if (!texture)
+        const Painted *painted = textureAt(rdram, tex, guest<uint64_t>(rdram, vif + 0x18));
+        if (!painted)
             return;
+        const auto &texture = painted->texture;
 
         std::vector<std::array<float, 3>> posed(model->vertices.size());
         for (size_t i = 0; i < model->vertices.size(); ++i) {
@@ -371,10 +381,7 @@ namespace con::characters
 
         Draw d;
         d.texture = texture;
-        d.material.tex0 = texture->key;
-        d.material.blend = bozo::render::Material::Blend::Alpha;
-        d.material.alphaTest = true;
-        d.material.alphaRef = 1;
+        d.material = painted->material;
         d.matrix = matrix;
         d.vertices.reserve(model->corners.size());
         const float width = float(texture->width), height = float(texture->height);

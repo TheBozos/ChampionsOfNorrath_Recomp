@@ -484,6 +484,32 @@ namespace con::textures
         return true;
     }
 
+    void modelBlend(uint64_t alpha, bozo::render::Texture &texture, bozo::render::Material &material)
+    {
+        using Blend = bozo::render::Material::Blend;
+        const uint32_t equation = uint32_t(alpha & 0xff);
+        material.alphaTest = false;
+        if (equation == 0x09) {
+            material.blend = Blend::DestinationBySource;
+            return;
+        }
+        if (equation == 0x48) {
+            material.blend = Blend::Additive;
+            return;
+        }
+        if (equation == 0x29) {
+            material.blend = Blend::Additive;
+            for (uint32_t &texel : texture.rgba)
+                texel = (texel & 0xffffffu) | 0x80000000u;
+            return;
+        }
+        material.blend = Blend::Alpha;
+        material.alphaTest = true;
+        material.alphaRef = 1;
+        for (uint32_t &texel : texture.rgba)
+            texel = (texel & 0xffffffu) | (0x80u - std::min(texel >> 24, 0x80u)) << 24;
+    }
+
     bool Level::open(const std::string &image, const std::string &name, std::string &error)
     {
         static std::atomic<uint64_t> serial{0};
