@@ -18,6 +18,9 @@ namespace con::lights
 
     // lightSetupForCharacter: the two nearest point lights of the light grid, the fill, the sun, the ambient.
     Lights forCharacter(const uint8_t *rdram, uint32_t gp, const Vec3 &at);
+    // drawWorldObject's set for a placed model, by its chunk's lighting word: 1 the character set, 2 the sun as ambient,
+    // 8 a fixed ambient, otherwise the ambient, the fill and the sun.
+    Lights forScenery(const uint8_t *rdram, uint32_t gp, const Vec3 &at, uint32_t word);
     // The vertex colour for a camera-space unit normal: ambient + max(light . normal, 0) x colour, clamped.
     uint32_t shade(const Lights &lights, const Vec3 &normal);
 }

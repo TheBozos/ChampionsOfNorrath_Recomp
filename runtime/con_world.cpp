@@ -2,6 +2,7 @@
 #include "con_world.h"
 
 #include "con_characters.h"
+#include "con_lights.h"
 #include "con_textures.h"
 
 #include "bozo/context.h"
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <cstdio>
 #include <cstring>
@@ -40,11 +42,15 @@ namespace con::world
             bozo::render::Material material;
             std::array<int32_t, 3> translation{};
             bool late = false;
+            std::vector<std::array<float, 3>> normals;
+            std::array<float, 3> position{};
+            uint32_t lighting = 0;
         };
 
         struct Queued
         {
             const Mesh *mesh = nullptr;
+            std::vector<bozo::render::Vertex> shaded;
             std::array<float, 16> matrix{};
         };
 
@@ -82,9 +88,16 @@ namespace con::world
         }
 
         using Placement = std::function<void(int16_t, int16_t, int16_t, bozo::render::Vertex &)>;
+        using Turn = std::function<std::array<float, 3>(const std::array<float, 3> &)>;
+
+        struct Normals
+        {
+            Turn turn;
+            std::vector<std::array<float, 3>> *out = nullptr;
+        };
 
         void addBatch(const uint8_t *rdram, const Placement &place, const Unpack (&u)[6], float width, float height,
-                      std::vector<bozo::render::Vertex> &out)
+                      std::vector<bozo::render::Vertex> &out, const Normals &normals = {})
         {
             const uint32_t count = u[0].count;
             const uint32_t tag = guest<uint32_t>(rdram, u[4].data), prim = guest<uint32_t>(rdram, u[4].data + 4);
@@ -128,6 +141,12 @@ namespace con::world
                 v.u = float(guest<uint16_t>(rdram, uv)) / 16.0f / width;
                 v.v = float(guest<uint16_t>(rdram, uv + 2)) / 16.0f / height;
                 v.rgba = 0x80808080u;
+                if (normals.out) {
+                    const uint32_t at3 = u[1].data + uint32_t(slot[at]) * 3;
+                    normals.out->push_back(normals.turn({float(guest<int8_t>(rdram, at3)) / 127.0f,
+                                                         float(guest<int8_t>(rdram, at3 + 1)) / 127.0f,
+                                                         float(guest<int8_t>(rdram, at3 + 2)) / 127.0f}));
+                }
                 return v;
             };
             for (uint32_t p = 2; p < strip; ++p) {
@@ -173,7 +192,7 @@ namespace con::world
         // A model packet: positions, normals, slot rows, weights, copy rows, GIF tags, [shell normals], MSCAL, then the
         // texture coordinates. Only the blocks the strip needs are kept, in addBatch's order.
         void decodeModelMesh(const uint8_t *rdram, const Placement &place, uint32_t at, uint32_t end, float width, float height,
-                             std::vector<bozo::render::Vertex> &out)
+                             std::vector<bozo::render::Vertex> &out, const Normals &normals)
         {
             Unpack unpacks[6];
             int found = 0;
@@ -190,7 +209,7 @@ namespace con::world
                     if (called) {
                         unpacks[5] = block;
                         if (found == 5)
-                            addBatch(rdram, place, unpacks, width, height, out);
+                            addBatch(rdram, place, unpacks, width, height, out, normals);
                         found = 0;
                         called = false;
                     } else if (found == 0) {
@@ -367,6 +386,17 @@ namespace con::world
                 v.x = x0 + lx * cosine - ly * sine;
                 v.y = y0 + lx * sine + ly * cosine;
             };
+            const Turn turn = [&](const std::array<float, 3> &n) -> std::array<float, 3> {
+                if (chunk.flags & kQuarterTurns) {
+                    const int code = chunk.cosine & 7;
+                    const float a = code & 1 ? -n[0] : n[0], b = code & 2 ? -n[1] : n[1];
+                    return {code & 4 ? b : a, code & 4 ? a : b, n[2]};
+                }
+                const float cosine = float(chunk.cosine) / 32767.0f, sine = float(chunk.sine) / 32767.0f;
+                return {n[0] * cosine - n[1] * sine, n[0] * sine + n[1] * cosine, n[2]};
+            };
+            mesh->position = {x0, y0, z0};
+            mesh->lighting = guest<uint32_t>(rdram, data + 0xac);
             const int32_t meshes = guest<int8_t>(rdram, vif + 0x12);
             const uint64_t hidden = guest<uint64_t>(rdram, vif + 8);
             const auto meshAt = [&](int32_t i) {
@@ -376,7 +406,7 @@ namespace con::world
             for (int32_t i = 0; i < meshes && i < 64; ++i)
                 if (!(hidden >> i & 1))
                     decodeModelMesh(rdram, place, meshAt(i), meshAt(i + 1), float(texture->width), float(texture->height),
-                                    mesh->vertices);
+                                    mesh->vertices, {turn, &mesh->normals});
             slot = std::move(mesh);
         }
         if (!slot)
@@ -384,7 +414,24 @@ namespace con::world
         Queued queued;
         queued.mesh = slot.get();
         std::memcpy(queued.matrix.data(), rdram + kViewProjection, sizeof(queued.matrix));
-        g_queue.push_back(queued);
+        if (slot->normals.size() == slot->vertices.size()) {
+            const auto lights = con::lights::forScenery(rdram, getRegU32(ctx, 28), slot->position, slot->lighting);
+            const auto &m = queued.matrix;
+            std::array<float, 3> scale{};
+            for (uint32_t k = 0; k < 3; ++k) {
+                const float l = std::sqrt(m[k] * m[k] + m[4 + k] * m[4 + k] + m[8 + k] * m[8 + k]);
+                scale[k] = l > 0.0f ? 0.99f / l : 0.0f;
+            }
+            queued.shaded = slot->vertices;
+            for (size_t i = 0; i < queued.shaded.size(); ++i) {
+                const auto &n = slot->normals[i];
+                std::array<float, 3> camera{};
+                for (uint32_t k = 0; k < 3; ++k)
+                    camera[k] = (m[k] * n[0] + m[4 + k] * n[1] + m[8 + k] * n[2]) * scale[k];
+                queued.shaded[i].rgba = con::lights::shade(lights, camera);
+            }
+        }
+        g_queue.push_back(std::move(queued));
     }
 
     void endFrame()
@@ -401,9 +448,11 @@ namespace con::world
         renderer.beginFrame(screen);
         for (const bool late : {false, true}) {
             for (const Queued &queued : g_queue)
-                if (queued.mesh->late == late && !queued.mesh->vertices.empty())
-                    renderer.draw(queued.mesh->material, queued.matrix.data(), queued.mesh->vertices.data(),
-                                  uint32_t(queued.mesh->vertices.size()), queued.mesh->texture);
+                if (queued.mesh->late == late && !queued.mesh->vertices.empty()) {
+                    const auto &vertices = queued.shaded.empty() ? queued.mesh->vertices : queued.shaded;
+                    renderer.draw(queued.mesh->material, queued.matrix.data(), vertices.data(), uint32_t(vertices.size()),
+                                  queued.mesh->texture);
+                }
             if (!late)
                 con::characters::submit();
         }

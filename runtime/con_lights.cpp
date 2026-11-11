@@ -21,7 +21,8 @@ namespace con::lights
         }
 
         constexpr uint32_t kLightGrid = 0x004f40f0u, kFillDirection = 0x004f40e0u, kSunDirection = 0x004f40d0u;
-        constexpr uint32_t kView = 0x0037ef00u;
+        constexpr uint32_t kView = 0x0037ef00u, kFixedAmbient = 0x004841b8u, kSceneSunDirection = 0x004f406cu;
+        constexpr int32_t kSceneSunScale = -0x38c8;
         constexpr int32_t kLightGroup = -0x3f44, kLightScale = -0x1188, kFillColour = -0x1190, kSunColour = -0x1198,
                           kAmbientColour = -0x11a0;
 
@@ -84,6 +85,29 @@ namespace con::lights
         lights.colour[2] = colourAt(rdram, gp + uint32_t(kFillColour));
         lights.colour[3] = colourAt(rdram, gp + uint32_t(kSunColour));
         lights.ambient = colourAt(rdram, gp + uint32_t(kAmbientColour));
+        return lights;
+    }
+
+    Lights forScenery(const uint8_t *rdram, uint32_t gp, const Vec3 &at, uint32_t word)
+    {
+        if (word & 1)
+            return forCharacter(rdram, gp, at);
+        Lights lights;
+        if (word & 2) {
+            lights.ambient = colourAt(rdram, gp + uint32_t(kSunColour));
+            return lights;
+        }
+        if (word & 8) {
+            lights.ambient = colourAt(rdram, kFixedAmbient);
+            return lights;
+        }
+        lights.ambient = colourAt(rdram, gp + uint32_t(kAmbientColour));
+        for (uint32_t k = 0; k < 3; ++k) {
+            lights.direction[2][k] = guest<float>(rdram, kFillDirection + k * 4);
+            lights.direction[3][k] = guest<float>(rdram, kSceneSunDirection + k * 4);
+        }
+        lights.colour[2] = colourAt(rdram, gp + uint32_t(kFillColour));
+        lights.colour[3] = colourAt(rdram, gp + uint32_t(kSunColour), guest<float>(rdram, gp + uint32_t(kSceneSunScale)));
         return lights;
     }
 
