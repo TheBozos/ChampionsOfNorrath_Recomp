@@ -275,6 +275,24 @@ namespace
         con::textures::Cell cut(truncated);
         check(!cut.decode(0, out), "a cell cut short is refused");
     }
+    void modelBlends()
+    {
+        using Blend = bozo::render::Material::Blend;
+        const auto blended = [](uint64_t alpha, uint32_t texel, bozo::render::Material &material) {
+            bozo::render::Texture texture;
+            texture.width = texture.height = 1;
+            texture.rgba = {texel};
+            con::textures::modelBlend(alpha, texture, material);
+            return texture.rgba[0];
+        };
+        bozo::render::Material m;
+        check(blended(1, 0x00112233u, m) == 0x80112233u && m.blend == Blend::Alpha && m.alphaTest, "ALPHA 1: alpha 0 is opaque");
+        check(blended(1, 0x80112233u, m) == 0x00112233u, "ALPHA 1: alpha 0x80 is clear");
+        check(blended(9, 0x40112233u, m) == 0x40112233u && m.blend == Blend::DestinationBySource && !m.alphaTest,
+              "ALPHA 9: Cs + Cd * As, alpha kept");
+        check(blended(0x8000000029ull, 0x10112233u, m) == 0x80112233u && m.blend == Blend::Additive, "ALPHA 0x29: Cs + Cd");
+        check(blended(0x48, 0x40112233u, m) == 0x40112233u && m.blend == Blend::Additive, "ALPHA 0x48: Cs * As + Cd");
+    }
 }
 
 int main()
@@ -283,6 +301,7 @@ int main()
     vqOneColour();
     tileTexture();
     lumpFourBit();
+    modelBlends();
     std::printf(failures ? "%d failed\n" : "ok\n", failures);
     return failures ? 1 : 0;
 }
