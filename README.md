@@ -38,8 +38,8 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 | A window held to real time | 🔧 runs at 60 frames a second, into the hub level Kelethin |
 | Frame loop on the PC clock, no vblank pacing | 🔧 frames held to the PC clock; the game's vblank waits are still there |
 | Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; drawn on the level's geometry |
-| 3D: native meshes | 🔧 level geometry, scenery models and skinned characters with their equipment draw with the game's camera; water, particles, lighting and shadows don't |
-| 2D, menus and HUD | 🔧 the game's sprite and font calls drawn natively, menus and dialogs show; untextured 2D and fades aren't drawn |
+| 3D: native meshes | 🔧 level geometry, scenery models and lit, skinned characters with their equipment draw with the game's camera; water, particles and shadows don't |
+| 2D, menus and HUD | 🔧 the game's sprite and font calls drawn natively, menus, dialogs and screen fades show; untextured 2D isn't drawn |
 | Movies | ⏳ |
 | Window | ⏳ |
 | Windows build | ⏳ not tried |
