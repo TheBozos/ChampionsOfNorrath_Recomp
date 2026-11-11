@@ -7,6 +7,7 @@
 #include "bozo/render/renderer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -21,6 +22,7 @@ namespace con::overlay
         constexpr uint32_t kTextureDrawSuperColor = 0x0016e860u, kTextureDrawFloat = 0x0016d978u;
         constexpr uint32_t kFontEnd = 0x00172f88u;
         constexpr int32_t kFontsSkipped = -0x1324;
+        constexpr int32_t kScreenRed = -0x35c4, kScreenGreen = -0x35c0, kScreenBlue = -0x35bc;
         constexpr int32_t kFontLayer = -0x1048, kScissorScroll = -0x35e0, kDisplayBlank = -0x35e4;
         constexpr int32_t kCurrentFont = -0x1064, kFontColour = -0x1068, kFontAlpha = -0x38d8;
         constexpr int32_t kNoGlyph = 0x7ff;
@@ -253,6 +255,41 @@ namespace con::overlay
         }
     }
 
+    namespace
+    {
+        // The present pass multiplies the frame by the screen colour (0x80 is unchanged): fades to black and flashes.
+        void fade(const uint8_t *rdram, const R5900Context *ctx)
+        {
+            float level = 0.0f;
+            for (const int32_t offset : {kScreenRed, kScreenGreen, kScreenBlue})
+                level += float(int32_t(gpWord(rdram, ctx, offset))) / (3.0f * 128.0f);
+            if (std::fabs(level - 1.0f) < 0.005f)
+                return;
+            bozo::render::Material material;
+            material.textured = false;
+            material.depthTest = false;
+            material.depthWrite = false;
+            uint32_t colour;
+            if (level < 1.0f) {
+                material.blend = bozo::render::Material::Blend::DestinationBySource;
+                colour = uint32_t(std::clamp(level, 0.0f, 1.0f) * 128.0f) << 24;
+            } else {
+                material.blend = bozo::render::Material::Blend::Additive;
+                colour = uint32_t(std::clamp(level - 1.0f, 0.0f, 1.0f) * 128.0f) << 24 | 0x808080u;
+            }
+            const auto corner = [&](float x, float y) {
+                bozo::render::Vertex vertex;
+                vertex.x = kOriginX + x;
+                vertex.y = kOriginY + y;
+                vertex.rgba = colour;
+                return vertex;
+            };
+            const bozo::render::Vertex quad[6] = {corner(0, 0), corner(640, 0), corner(0, 448),
+                                                  corner(640, 0), corner(640, 448), corner(0, 448)};
+            bozo::render::Renderer::instance().drawOverlay(material, quad, 6u, nullptr);
+        }
+    }
+
     void endFrame(const uint8_t *rdram, const R5900Context *ctx)
     {
         auto &renderer = bozo::render::Renderer::instance();
@@ -273,6 +310,7 @@ namespace con::overlay
             }
         }
         g_pending.clear();
+        fade(rdram, ctx);
         bozo::render::Screen screen;
         screen.originX = kOriginX;
         screen.originY = kOriginY;
