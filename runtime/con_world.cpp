@@ -169,6 +169,59 @@ namespace con::world
             }
         }
 
+        // A model packet: positions, normals, slot rows, weights, copy rows, GIF tags, [shell normals], MSCAL, then the
+        // texture coordinates. Only the blocks the strip needs are kept, in addBatch's order.
+        void decodeModelMesh(const uint8_t *rdram, const Placement &place, uint32_t at, uint32_t end, float width, float height,
+                             std::vector<bozo::render::Vertex> &out)
+        {
+            Unpack unpacks[6];
+            int found = 0;
+            bool called = false;
+            while (at + 4 <= end) {
+                const uint32_t code = guest<uint32_t>(rdram, at);
+                at += 4;
+                const uint32_t command = (code >> 24) & 0x7f, number = (code >> 16) & 0xff, immediate = code & 0xffff;
+                if (command >= 0x60) {
+                    const uint32_t components = ((command >> 2) & 3) + 1, bits = 32u >> (command & 3);
+                    const uint32_t count = number ? number : 256;
+                    const Unpack block{count, at};
+                    at += ((components * bits * count + 31) / 32) * 4;
+                    if (called) {
+                        unpacks[5] = block;
+                        if (found == 5)
+                            addBatch(rdram, place, unpacks, width, height, out);
+                        found = 0;
+                        called = false;
+                    } else if (found == 0) {
+                        unpacks[0] = block;
+                        found = 1;
+                    } else if (found == 1) {
+                        unpacks[1] = block;
+                        found = 2;
+                    } else if (found == 2) {
+                        unpacks[2] = block;
+                        found = 3;
+                    } else if ((command & 0xf) == 0xd) {
+                        unpacks[3] = block;
+                        found = 4;
+                    } else if ((command & 0xf) == 0xc && found == 4) {
+                        unpacks[4] = block;
+                        found = 5;
+                    }
+                } else if (command == 0x14 || command == 0x15 || command == 0x17) {
+                    called = found == 5;
+                    if (!called)
+                        found = 0;
+                } else if (command == 0x50 || command == 0x51) {
+                    at += (immediate ? immediate : 0x10000u) * 16;
+                } else if (command == 0x20) {
+                    at += 4;
+                } else if (command == 0x30 || command == 0x31) {
+                    at += 16;
+                }
+            }
+        }
+
         std::string g_discImage, g_levelName;
         std::unique_ptr<con::textures::Level> g_level;
         bool g_published = false;
@@ -259,6 +312,76 @@ namespace con::world
         const std::array<int32_t, 3> translation{chunk.tx, chunk.ty, chunk.tz};
         if (!slot || slot->translation != translation)
             slot = build(rdram, record, chunk);
+        if (!slot)
+            return;
+        Queued queued;
+        queued.mesh = slot.get();
+        std::memcpy(queued.matrix.data(), rdram + kViewProjection, sizeof(queued.matrix));
+        g_queue.push_back(queued);
+    }
+
+    // A placed model (scenery): its .vif and .tex as the game loaded them, in world space once, drawn with the camera.
+    void drawModel(const uint8_t *rdram, const R5900Context *ctx)
+    {
+        followLevel(rdram);
+        const uint32_t record = getRegU32(ctx, 19), data = getRegU32(ctx, 20);
+        const uint32_t vif = guest<uint32_t>(rdram, data + 0xa0), tex = guest<uint32_t>(rdram, data + 0xa4);
+        if (!vif || !tex)
+            return;
+        auto &slot = g_meshes[record];
+        Chunk chunk;
+        chunk.flags = guest<uint32_t>(rdram, record + 0x24);
+        chunk.tx = guest<int32_t>(rdram, record + 0x28);
+        chunk.ty = guest<int32_t>(rdram, record + 0x2c);
+        chunk.tz = guest<int32_t>(rdram, record + 0x30);
+        chunk.cosine = guest<int16_t>(rdram, record + 0x36);
+        chunk.sine = guest<int16_t>(rdram, record + 0x38);
+        const std::array<int32_t, 3> translation{chunk.tx, chunk.ty, chunk.tz};
+        if (!slot || slot->translation != translation) {
+            slot.reset();
+            bozo::render::Texture source;
+            if (!con::textures::decodeLump(rdram, tex, source) || !source.width || !source.height)
+                return;
+            auto mesh = std::make_unique<Mesh>();
+            auto texture = std::make_shared<bozo::render::Texture>(std::move(source));
+            for (uint32_t &texel : texture->rgba)
+                texel = (texel & 0xffffffu) | (0x80u - std::min(texel >> 24, 0x80u)) << 24;
+            texture->key = 0x4d4f444500000000ull | vif;
+            texture->version = 1;
+            mesh->texture = texture;
+            mesh->translation = translation;
+            mesh->late = guest<uint16_t>(rdram, vif + 0x10) & 0x08;
+            mesh->material.tex0 = texture->key;
+            mesh->material.blend = bozo::render::Material::Blend::Alpha;
+            mesh->material.alphaTest = true;
+            mesh->material.alphaRef = 1;
+            const float x0 = float(chunk.tx) * 0.25f, y0 = float(chunk.ty) * 0.25f, z0 = float(chunk.tz) * 0.25f;
+            const Placement place = [&](int16_t x, int16_t y, int16_t z, bozo::render::Vertex &v) {
+                const float lx = float(x) / 16.0f, ly = float(y) / 16.0f;
+                v.z = z0 + float(z) / 16.0f;
+                if (chunk.flags & kQuarterTurns) {
+                    const int code = chunk.cosine & 7;
+                    const float a = code & 1 ? -lx : lx, b = code & 2 ? -ly : ly;
+                    v.x = x0 + (code & 4 ? b : a);
+                    v.y = y0 + (code & 4 ? a : b);
+                    return;
+                }
+                const float cosine = float(chunk.cosine) / 32767.0f, sine = float(chunk.sine) / 32767.0f;
+                v.x = x0 + lx * cosine - ly * sine;
+                v.y = y0 + lx * sine + ly * cosine;
+            };
+            const int32_t meshes = guest<int8_t>(rdram, vif + 0x12);
+            const uint64_t hidden = guest<uint64_t>(rdram, vif + 8);
+            const auto meshAt = [&](int32_t i) {
+                const uint32_t offset = guest<uint32_t>(rdram, vif + 0x28 + uint32_t(i) * 4);
+                return offset < vif ? vif + offset : offset;
+            };
+            for (int32_t i = 0; i < meshes && i < 64; ++i)
+                if (!(hidden >> i & 1))
+                    decodeModelMesh(rdram, place, meshAt(i), meshAt(i + 1), float(texture->width), float(texture->height),
+                                    mesh->vertices);
+            slot = std::move(mesh);
+        }
         if (!slot)
             return;
         Queued queued;

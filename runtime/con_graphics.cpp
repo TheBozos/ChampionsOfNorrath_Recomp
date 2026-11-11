@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 
 namespace con::graphics
 {
@@ -22,6 +23,8 @@ namespace con::graphics
             0x00190874u,
             // drawWorldPolyset's geometry path, drawn natively (the function then exits, $5 = 0 being no texture cell).
             0x00179c00u,
+            // drawWorldObject once its model's entries are found: the model drawn natively, the load kept.
+            0x001793b8u,
             // Native presentation owns the display: engineInit's and vblankHandler's PMODE, DISPFB, DISPLAY, SMODE2.
             0x001902d4u, 0x00190480u, 0x0019058cu, 0x00190640u, 0x0019064cu, 0x0019069cu, 0x001906a4u, 0x001906acu,
             0x001906b4u,
@@ -67,6 +70,12 @@ namespace con::graphics
                 setRegU64(ctx, 3, 0);
             else if (pc == 0x0015efe4u || pc == 0x0015f068u)
                 setRegU64(ctx, 2, 0);
+            else if (pc == 0x001793b8u) {
+                con::world::drawModel(ram, ctx);
+                uint32_t frame;
+                std::memcpy(&frame, ram + ((getRegU32(ctx, 28) - 0x3528u) & 0x1ffffffu), 4);
+                setRegU64(ctx, 2, int64_t(int32_t(frame)));
+            }
             else if (pc == 0x00179c00u) {
                 con::world::drawChunk(ram, ctx);
                 setRegU64(ctx, 5, 0);
