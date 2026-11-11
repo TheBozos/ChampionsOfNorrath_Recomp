@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -79,7 +80,9 @@ namespace con::world
             }
         }
 
-        void addBatch(const uint8_t *rdram, const Chunk &chunk, const Unpack (&u)[6], float width, float height,
+        using Placement = std::function<void(int16_t, int16_t, int16_t, bozo::render::Vertex &)>;
+
+        void addBatch(const uint8_t *rdram, const Placement &place, const Unpack (&u)[6], float width, float height,
                       std::vector<bozo::render::Vertex> &out)
         {
             const uint32_t count = u[0].count;
@@ -118,7 +121,7 @@ namespace con::world
             const auto vertex = [&](uint32_t at) {
                 const uint32_t position = u[0].data + uint32_t(slot[at]) * 6;
                 bozo::render::Vertex v;
-                place(chunk, guest<int16_t>(rdram, position), guest<int16_t>(rdram, position + 2),
+                place(guest<int16_t>(rdram, position), guest<int16_t>(rdram, position + 2),
                       guest<int16_t>(rdram, position + 4), v);
                 const uint32_t uv = u[5].data + at * 4;
                 v.u = float(guest<uint16_t>(rdram, uv)) / 16.0f / width;
@@ -137,7 +140,7 @@ namespace con::world
             }
         }
 
-        void decodePacket(const uint8_t *rdram, const Chunk &chunk, uint32_t at, uint32_t end, float width, float height,
+        void decodePacket(const uint8_t *rdram, const Placement &place, uint32_t at, uint32_t end, float width, float height,
                           std::vector<bozo::render::Vertex> &out)
         {
             Unpack unpacks[6];
@@ -153,7 +156,7 @@ namespace con::world
                         unpacks[found++] = {count, at};
                     at += ((components * bits * count + 31) / 32) * 4;
                     if (found == 6) {
-                        addBatch(rdram, chunk, unpacks, width, height, out);
+                        addBatch(rdram, place, unpacks, width, height, out);
                         found = 0;
                     }
                 } else if (command == 0x50 || command == 0x51) {
@@ -231,7 +234,7 @@ namespace con::world
             material.alphaTest = chunk.flags & kAlphaTested;
             material.alphaRef = 0x51;
             const uint32_t data = guest<uint32_t>(rdram, record);
-            decodePacket(rdram, chunk, data, data + guest<uint32_t>(rdram, record + 4) * 16, float(source->width),
+            decodePacket(rdram, [&](int16_t x, int16_t y, int16_t z, bozo::render::Vertex &v) { place(chunk, x, y, z, v); }, data, data + guest<uint32_t>(rdram, record + 4) * 16, float(source->width),
                          float(source->height), mesh->vertices);
             return mesh;
         }
