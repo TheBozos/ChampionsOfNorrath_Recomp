@@ -345,17 +345,13 @@ namespace con::world
                 return;
             auto mesh = std::make_unique<Mesh>();
             auto texture = std::make_shared<bozo::render::Texture>(std::move(source));
-            for (uint32_t &texel : texture->rgba)
-                texel = (texel & 0xffffffu) | (0x80u - std::min(texel >> 24, 0x80u)) << 24;
+            con::textures::modelBlend(guest<uint64_t>(rdram, vif + 0x18), *texture, mesh->material);
             texture->key = 0x4d4f444500000000ull | vif;
             texture->version = 1;
             mesh->texture = texture;
             mesh->translation = translation;
             mesh->late = guest<uint16_t>(rdram, vif + 0x10) & 0x08;
             mesh->material.tex0 = texture->key;
-            mesh->material.blend = bozo::render::Material::Blend::Alpha;
-            mesh->material.alphaTest = true;
-            mesh->material.alphaRef = 1;
             const float x0 = float(chunk.tx) * 0.25f, y0 = float(chunk.ty) * 0.25f, z0 = float(chunk.tz) * 0.25f;
             const Placement place = [&](int16_t x, int16_t y, int16_t z, bozo::render::Vertex &v) {
                 const float lx = float(x) / 16.0f, ly = float(y) / 16.0f;
