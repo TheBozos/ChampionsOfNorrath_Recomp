@@ -5,6 +5,7 @@
 //                [--report n] [--print] [--quiet] [--no-sound]
 #include "con_audio.h"
 #include "con_functions.h"
+#include "con_world.h"
 
 #include "bozo/app/determinism.h"
 #include "bozo/ee/dispatcher.h"
@@ -96,6 +97,7 @@ int main(int argc, char **argv)
         return 2;
     }
     con::audio::attach(host.libraries());
+    con::world::setDiscImage(opt.iso);
     std::printf("con-headless: %s, %zu overrides, ELF %s, disc %s\n", port->title, registry.functions().size(),
                 opt.elf.c_str(), opt.iso.c_str());
 
