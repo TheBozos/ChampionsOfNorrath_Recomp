@@ -197,7 +197,7 @@ namespace con::particles
                 const uint32_t data = kPageData + ((page - kPages) << 10);
                 for (uint32_t n = begin; n < end; ++n)
                     if ((n & 31u) && (n & 31u) != 31u && read(rdram, data + n * 16u, now, lifetime, particle))
-                        emit(particle);
+                        emit(particle, n);
                 if (page == tail)
                     break;
                 page = guest<uint32_t>(rdram, page);
@@ -273,7 +273,7 @@ namespace con::particles
                 }
                 for (uint32_t k = 0; k < 4; ++k)
                     drawList(rdram, system + pass * 0x40u + k * 0x10u, now, guest<int32_t>(rdram, kLifetimes + k * 4u),
-                             [&](const Particle &p) {
+                             [&](const Particle &p, uint32_t) {
                                  if (pass == 2)
                                      line(rdram, m, p, batch.vertices);
                                  else
