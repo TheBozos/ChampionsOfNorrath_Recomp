@@ -3,6 +3,7 @@
 #include "con_characters.h"
 
 #include "con_lights.h"
+#include "con_world.h"
 #include "con_textures.h"
 
 #include "bozo/context.h"
@@ -20,7 +21,7 @@ namespace con::characters
 {
     namespace
     {
-        constexpr uint32_t kRamMask = 0x1ffffffu, kMaxJoints = 64;
+        constexpr uint32_t kRamMask = 0x1ffffffu, kMaxJoints = 64, kEnvironmentProgram = 0x44;
 
         template <typename T>
         T guest(const uint8_t *rdram, uint32_t address)
@@ -43,6 +44,7 @@ namespace con::characters
         {
             uint32_t vertex = 0;
             float u = 0, v = 0;
+            bool environment = false;
         };
 
         struct Model
@@ -58,7 +60,8 @@ namespace con::characters
         };
 
         // One packet: rest positions, weights, then the strip the slot rows build, as triangles of vertex indices.
-        void decodePacket(const uint8_t *rdram, const std::vector<Unpack> &u, const Unpack &uv, uint32_t mesh, Model &model)
+        void decodePacket(const uint8_t *rdram, const std::vector<Unpack> &u, const Unpack &uv, uint32_t mesh, bool environment,
+                          Model &model)
         {
             if (u.size() < 6)
                 return;
@@ -163,6 +166,7 @@ namespace con::characters
                     c.vertex = base + uint32_t(slot[q]);
                     c.u = float(guest<uint16_t>(rdram, uv.data + q * 4)) / 16.0f;
                     c.v = float(guest<uint16_t>(rdram, uv.data + q * 4 + 2)) / 16.0f;
+                    c.environment = environment;
                     model.corners.push_back(c);
                     model.meshOfCorner.push_back(mesh);
                 }
@@ -173,6 +177,7 @@ namespace con::characters
         {
             std::vector<Unpack> unpacks;
             bool called = false;
+            uint32_t program = 0;
             while (at + 4 <= end) {
                 const uint32_t code = guest<uint32_t>(rdram, at);
                 at += 4;
@@ -183,7 +188,7 @@ namespace con::characters
                     const Unpack block{command, count, at};
                     at += ((components * bits * count + 31) / 32) * 4;
                     if (called) {
-                        decodePacket(rdram, unpacks, block, mesh, model);
+                        decodePacket(rdram, unpacks, block, mesh, program == kEnvironmentProgram, model);
                         unpacks.clear();
                         called = false;
                     } else {
@@ -191,6 +196,7 @@ namespace con::characters
                     }
                 } else if (command == 0x14 || command == 0x15 || command == 0x17) {
                     called = true;
+                    program = immediate;
                 } else if (command == 0x50 || command == 0x51) {
                     at += (immediate ? immediate : 0x10000u) * 16;
                 } else if (command == 0x20) {
@@ -307,7 +313,7 @@ namespace con::characters
             return joints;
         }
 
-        void emit(const uint8_t *rdram, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
+        void emit(const uint8_t *rdram, uint32_t gp, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
                   const std::array<float, 16> &matrix, const Lights &lights);
     }
 
@@ -320,7 +326,7 @@ namespace con::characters
         std::memcpy(parent.matrix.data(), rdram + ((stack + 0x20u) & kRamMask), sizeof(parent.matrix));
         parent.lights = con::lights::forCharacter(rdram, getRegU32(ctx, 28),
                                  {guest<float>(rdram, stack), guest<float>(rdram, stack + 4), guest<float>(rdram, stack + 8)});
-        emit(rdram, vif, tex, getRegU64(ctx, 21), parent.joints, parent.matrix, parent.lights);
+        emit(rdram, getRegU32(ctx, 28), vif, tex, getRegU64(ctx, 21), parent.joints, parent.matrix, parent.lights);
     }
 
     // A part worn or held by the model drawn last with that parent: worn parts (attach slot -1) take the parent's joints,
@@ -334,7 +340,7 @@ namespace con::characters
         const Parent &parent = found->second;
         const int8_t slot = guest<int8_t>(rdram, part + 0x13);
         if (slot < 0) {
-            emit(rdram, part, tex, getRegU64(ctx, 18), parent.joints, parent.matrix, parent.lights);
+            emit(rdram, getRegU32(ctx, 28), part, tex, getRegU64(ctx, 18), parent.joints, parent.matrix, parent.lights);
             return;
         }
         const uint32_t table = parentVif + uint32_t(guest<uint8_t>(rdram, parentVif + 0x22)) * 16u + uint32_t(slot) * 0x34u;
@@ -354,12 +360,12 @@ namespace con::characters
         }
         Joints joints;
         joints.fill(attached);
-        emit(rdram, part, tex, getRegU64(ctx, 18), joints, parent.matrix, parent.lights);
+        emit(rdram, getRegU32(ctx, 28), part, tex, getRegU64(ctx, 18), joints, parent.matrix, parent.lights);
     }
 
     namespace
     {
-    void emit(const uint8_t *rdram, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
+    void emit(const uint8_t *rdram, uint32_t gp, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
               const std::array<float, 16> &matrix, const Lights &lights)
     {
         if (!vif || !tex)
@@ -384,6 +390,7 @@ namespace con::characters
         }
         std::vector<Vec3> posed(model->vertices.size());
         std::vector<uint32_t> lit(model->vertices.size());
+        std::vector<std::array<float, 2>> reflected(model->vertices.size());
         for (size_t i = 0; i < model->vertices.size(); ++i) {
             const Skinned &s = model->vertices[i];
             Vec3 out{}, normal{};
@@ -402,6 +409,7 @@ namespace con::characters
             for (uint32_t k = 0; k < 3; ++k)
                 camera[k] = (matrix[k] * normal[0] + matrix[4 + k] * normal[1] + matrix[8 + k] * normal[2]) * length[k];
             lit[i] = con::lights::shade(lights, camera);
+            reflected[i] = {192.0f + 64.0f * camera[0], 192.0f + 64.0f * camera[1]};
         }
 
         Draw d;
@@ -425,6 +433,36 @@ namespace con::characters
                 d.vertices.push_back(v);
             }
         }
+        const auto environment = con::world::environment(rdram, gp);
+        Draw e;
+        if (environment) {
+            e.texture = environment;
+            e.material.tex0 = environment->key;
+            e.material.gsBlend = true;
+            e.material.blendA = 0;
+            e.material.blendB = 1;
+            e.material.blendC = 2;
+            e.material.blendD = 1;
+            e.material.blendFix = guest<uint8_t>(rdram, vif + 0x20);
+            e.matrix = matrix;
+            for (size_t i = 0; i < model->corners.size(); i += 3) {
+                if (!(shown >> model->meshOfCorner[i] & 1) || !model->corners[i].environment)
+                    continue;
+                for (size_t k = 0; k < 3; ++k) {
+                    const Corner &c = model->corners[i + k];
+                    bozo::render::Vertex v;
+                    v.x = posed[c.vertex][0];
+                    v.y = posed[c.vertex][1];
+                    v.z = posed[c.vertex][2];
+                    v.u = reflected[c.vertex][0] / float(environment->width);
+                    v.v = reflected[c.vertex][1] / float(environment->height);
+                    v.rgba = lit[c.vertex];
+                    e.vertices.push_back(v);
+                }
+            }
+        }
+        if (!e.vertices.empty())
+            g_draws.push_back(std::move(e));
         if (!d.vertices.empty())
             g_draws.push_back(std::move(d));
     }
