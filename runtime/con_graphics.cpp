@@ -26,6 +26,8 @@ namespace con::graphics
             0x00190874u,
             // modelDrawShadow after its light loop: the shadows drawn natively, the packet load kept.
             0x0016ab70u,
+            // drawWaterPatch once its packet is built: the tile drawn natively, the splash code after it kept.
+            0x00179010u,
             // drawTrails once its lightning bolts are moved: the trails drawn natively, the packet load kept.
             0x00185424u,
             // drawWorldPolyset's geometry path, drawn natively (the function then exits, $5 = 0 being no texture cell).
@@ -101,6 +103,12 @@ namespace con::graphics
                 uint32_t packet;
                 std::memcpy(&packet, ram + ((getRegU32(ctx, 29) + 0x90u) & 0x1ffffffu), 4);
                 setRegU64(ctx, 3, int64_t(int32_t(packet)));
+            }
+            else if (pc == 0x00179010u) {
+                con::world::drawWater(ram, ctx);
+                uint32_t packet;
+                std::memcpy(&packet, ram + ((getRegU32(ctx, 28) - 0x3528u) & 0x1ffffffu), 4);
+                setRegU64(ctx, 4, int64_t(int32_t(packet)));
             }
             else if (pc == 0x00185424u) {
                 con::particles::drawTrails(ram, ctx);

@@ -26,10 +26,15 @@ namespace con::world
     namespace
     {
         constexpr uint32_t kRamMask = 0x1ffffffu;
-        constexpr uint32_t kLevelName = 0x0037f988u, kViewProjection = 0x0037ef30u;
+        constexpr uint32_t kLevelName = 0x0037f988u, kViewProjection = 0x0037ef30u, kCharacterViewProjection = 0x0037efb0u;
         constexpr uint32_t kView = 0x0037ef00u, kScrollingEnvironment = 0x4;
         constexpr int32_t kLevelOptions = -0x3530, kTick = -0x354c;
         constexpr float kScreenTerm = 0.07f, kGsOffset = 2048.0f;
+        constexpr int32_t kWaterTexture = -0x3850, kWaterColour = -0x389c, kWaterFix = -0x38a4, kWaterScale = -0x3894;
+        constexpr int32_t kWaterColour2 = -0x3898, kWaterFix2 = -0x38a0, kWaterScale2 = -0x3890, kWaterStep = -0x79a0;
+        constexpr uint32_t kWaterSecondSet = 0x1000;
+        constexpr float kWaterSlope = 0.0499200001f;
+        constexpr float kCharacterDepth = 1.0f / 1125899906842624.0f;
         constexpr uint32_t kQuarterTurns = 0x1, kEnvironment = 0x10, kMirrored = 0x40, kLateLayer = 0x200, kAlphaTested = 0x400;
 
         template <typename T>
@@ -397,6 +402,93 @@ namespace con::world
         }
     }
 
+    namespace
+    {
+        struct Water
+        {
+            bozo::render::Material material;
+            std::vector<bozo::render::Vertex> vertices;
+            std::shared_ptr<const bozo::render::Texture> texture;
+            std::array<float, 16> matrix{};
+        };
+
+        std::vector<Water> g_water;
+        std::unordered_map<uint64_t, std::shared_ptr<const bozo::render::Texture>> g_waterTextures;
+
+        std::shared_ptr<const bozo::render::Texture> waterTexture(const uint8_t *rdram, uint32_t lump)
+        {
+            const uint64_t key = con::textures::lumpKey(rdram, lump);
+            if (const auto found = g_waterTextures.find(key); found != g_waterTextures.end())
+                return found->second;
+            auto texture = std::make_shared<bozo::render::Texture>();
+            if (!con::textures::decodeLump(rdram, lump, *texture) || !texture->width || !texture->height)
+                return nullptr;
+            for (uint32_t &texel : texture->rgba)
+                texel = (texel & 0x00ffffffu) | 0x80000000u;
+            texture->key = key ^ 0x5741544552000000ull;
+            texture->version = 1;
+            if (g_waterTextures.size() >= 16)
+                g_waterTextures.clear();
+            g_waterTextures[key] = texture;
+            return texture;
+        }
+
+        uint32_t gpWord(const uint8_t *rdram, const R5900Context *ctx, int32_t offset)
+        {
+            return guest<uint32_t>(rdram, getRegU32(ctx, 28) + uint32_t(offset));
+        }
+    }
+
+    void drawWater(const uint8_t *rdram, const R5900Context *ctx)
+    {
+        const uint32_t chunk = getRegU32(ctx, 18), block = getRegU32(ctx, 19);
+        const uint32_t lump = gpWord(rdram, ctx, kWaterTexture);
+        if (!block || !lump)
+            return;
+        const auto texture = waterTexture(rdram, lump);
+        if (!texture)
+            return;
+        const bool second = guest<uint32_t>(rdram, chunk + 0x24) & kWaterSecondSet;
+        const uint32_t colour = gpWord(rdram, ctx, second ? kWaterColour2 : kWaterColour) & 0x00ffffffu;
+        const int32_t fix = int32_t(gpWord(rdram, ctx, second ? kWaterFix2 : kWaterFix));
+        const float scale = guest<float>(rdram, getRegU32(ctx, 28) + uint32_t(second ? kWaterScale2 : kWaterScale));
+        const float minX = guest<float>(rdram, chunk + 0x8), minY = guest<float>(rdram, chunk + 0xc), maxX = guest<float>(rdram, chunk + 0x14);
+        const float step = std::floor(maxX - minX + 0.5f) * guest<float>(rdram, getRegU32(ctx, 28) + uint32_t(kWaterStep));
+        const float originX = std::floor(minX + 0.5f), originY = std::floor(minY + 0.5f);
+        const float originZ = float(guest<int32_t>(rdram, chunk + 0x30)) * 0.25f;
+        const auto height = [&](uint32_t row, uint32_t column) {
+            return float(guest<int16_t>(rdram, block + 0x50 + row * 0x50 + column * 2));
+        };
+        const float texelU = 1.0f / float(texture->width), texelV = 1.0f / float(texture->height);
+        const auto vertex = [&](uint32_t row, uint32_t column) {
+            const float h = height(row, column + 1);
+            const float previous = row ? height(row - 1, column + 1) : h;
+            bozo::render::Vertex out;
+            out.x = originX + float(row) * step;
+            out.y = originY + float(column) * step;
+            out.z = originZ + h / 16.0f * scale;
+            out.u = (32.0f + kWaterSlope * (previous - h) / 16.0f) * texelU;
+            out.v = (32.0f + kWaterSlope * (height(row, column) - h) / 16.0f) * texelV;
+            out.rgba = colour | uint32_t(std::min(std::abs(fix), 0xff)) << 24;
+            return out;
+        };
+        Water water;
+        water.texture = texture;
+        water.material.tex0 = texture->key;
+        water.material.blend = fix < 0 ? bozo::render::Material::Blend::Additive : bozo::render::Material::Blend::Alpha;
+        water.material.depthTest = false;
+        water.material.depthWrite = false;
+        std::memcpy(water.matrix.data(), rdram + kCharacterViewProjection, sizeof(water.matrix));
+        for (const uint32_t i : {2u, 6u, 10u, 14u})
+            water.matrix[i] *= kCharacterDepth;
+        for (uint32_t row = 2; row < 32; ++row)
+            for (uint32_t column = 0; column < 30; ++column) {
+                const auto a = vertex(row, column), b = vertex(row - 1, column), c = vertex(row, column + 1), d = vertex(row - 1, column + 1);
+                water.vertices.insert(water.vertices.end(), {a, b, c, b, c, d});
+            }
+        g_water.push_back(std::move(water));
+    }
+
     void drawChunk(const uint8_t *rdram, const R5900Context *ctx)
     {
         followLevel(rdram);
@@ -521,7 +613,7 @@ namespace con::world
     void endFrame(uint32_t clearColour)
     {
         ++g_frames;
-        if (g_queue.empty() && !(clearColour & 0x00ffffffu) && !g_published && !con::characters::pending() && !con::particles::pending() && !con::shadows::pending())
+        if (g_queue.empty() && g_water.empty() && !(clearColour & 0x00ffffffu) && !g_published && !con::characters::pending() && !con::particles::pending() && !con::shadows::pending())
             return;
         auto &renderer = bozo::render::Renderer::instance();
         bozo::render::Screen screen;
@@ -572,14 +664,18 @@ namespace con::world
             if (!late) {
                 con::shadows::submit();
                 con::characters::submit(false);
+                for (const Water &water : g_water)
+                    renderer.draw(water.material, water.matrix.data(), water.vertices.data(), uint32_t(water.vertices.size()),
+                                  water.texture);
             }
         }
         con::particles::submit();
         renderer.endFrame();
-        g_published = !g_queue.empty() || con::characters::pending() || con::particles::pending() || con::shadows::pending();
+        g_published = !g_queue.empty() || !g_water.empty() || con::characters::pending() || con::particles::pending() || con::shadows::pending();
         con::characters::clear();
         con::particles::clear();
         con::shadows::clear();
+        g_water.clear();
         g_queue.clear();
     }
 }
