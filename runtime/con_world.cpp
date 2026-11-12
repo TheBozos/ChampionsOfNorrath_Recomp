@@ -336,10 +336,13 @@ namespace con::world
     namespace
     {
         std::shared_ptr<const bozo::render::Texture> g_environment;
-        uint64_t g_environmentKey = 0;
+        uint64_t g_environmentKey = 0, g_environmentFrame = ~0ull, g_frames = 0;
 
         const bozo::render::Texture *environmentTexture(const uint8_t *rdram, uint32_t gp)
         {
+            if (g_environmentFrame == g_frames && g_environment)
+                return g_environment.get();
+            g_environmentFrame = g_frames;
             const uint32_t lump = con::textures::findResource(rdram, gp, "env.lmp", "envtex.etex");
             if (!lump)
                 return nullptr;
@@ -359,6 +362,15 @@ namespace con::world
             return g_environment.get();
         }
 
+    }
+
+    std::shared_ptr<const bozo::render::Texture> environment(const uint8_t *rdram, uint32_t gp)
+    {
+        return environmentTexture(rdram, gp) ? g_environment : nullptr;
+    }
+
+    namespace
+    {
         std::vector<bozo::render::Vertex> environmentVertices(const uint8_t *rdram, uint32_t gp, const Mesh &mesh,
                                                               const std::array<float, 16> &m)
         {
@@ -508,6 +520,7 @@ namespace con::world
 
     void endFrame(uint32_t clearColour)
     {
+        ++g_frames;
         if (g_queue.empty() && !(clearColour & 0x00ffffffu) && !g_published && !con::characters::pending() && !con::particles::pending() && !con::shadows::pending())
             return;
         auto &renderer = bozo::render::Renderer::instance();
