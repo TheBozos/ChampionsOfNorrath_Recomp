@@ -1,3 +1,5 @@
+#include "con_particles.h"
+
 #include "bozo/context.h"
 #include "bozo/port.h"
 
@@ -69,6 +71,7 @@ namespace
         con::graphics::install(runtime);
         con::overlay::install(runtime);
         con::vu0::install(runtime);
+        con::particles::install(runtime);
         runtime.registerFunction(kInitVif, &returnVoid);
         runtime.registerFunction(kLgKbMInit, &keyboardAbsent);
         runtime.registerFunction(kLgAudEnumHint, &headsetHintNone);
