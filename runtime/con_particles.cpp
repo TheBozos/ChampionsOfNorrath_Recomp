@@ -20,7 +20,10 @@ namespace con::particles
     namespace
     {
         constexpr uint32_t kRamMask = 0x1ffffffu;
-        constexpr uint32_t kDrawPS = 0x00185c38u, kDrawSingleParticles = 0x001820f8u;
+        constexpr uint32_t kDrawPS = 0x00185c38u, kDrawSingleParticles = 0x001820f8u, kDrawLines = 0x00184cd8u;
+        constexpr uint32_t kLines = 0x006f4880u, kLineSize = 0x24u, kMaxLines = 0x80u;
+        constexpr int32_t kLineCount = -0xff4;
+        constexpr float kLineNear = 20.0f, kLineGuardX = 1400.0f, kLineGuardY = 1000.0f;
         constexpr uint32_t kView = 0x0037ef00u, kFaceRecords = 0x006ec880u;
         constexpr int32_t kFaceCount = -0xff8;
         constexpr uint16_t kRotated = 0x1, kAdditive = 0x2;
@@ -211,6 +214,41 @@ namespace con::particles
             material.depthWrite = false;
             material.nearest = true;
             return material;
+        }
+
+        // P_Line's lines (web strands and the like): pulled towards the camera by their width, kept as one-pixel lines.
+        void drawLines(uint8_t *rdram, R5900Context *ctx, Runtime *)
+        {
+            ctx->pc = getRegU32(ctx, 31);
+            const uint32_t count = guest<uint32_t>(rdram, getRegU32(ctx, 28) + uint32_t(kLineCount));
+            if (!count)
+                return;
+            Matrix m;
+            std::memcpy(m.data(), rdram + kViewProjection, sizeof(m));
+            const std::array<float, 3> forward{guest<float>(rdram, kView + 0x8), guest<float>(rdram, kView + 0x14), guest<float>(rdram, kView + 0x20)};
+            Batch batch;
+            batch.material = untexturedLines();
+            for (uint32_t i = 0; i < count && i < kMaxLines; ++i) {
+                const uint32_t record = kLines + i * kLineSize;
+                const float width = guest<float>(rdram, record + 0x20);
+                std::array<std::array<float, 3>, 2> ends;
+                bool visible = true;
+                for (uint32_t e = 0; e < 2 && visible; ++e) {
+                    std::array<float, 3> p;
+                    for (uint32_t k = 0; k < 3; ++k)
+                        p[k] = guest<float>(rdram, record + e * 0xc + k * 4) - forward[k] * width;
+                    const auto clip = project(m, p);
+                    const float w = clip[3] + width;
+                    visible = !(w < kLineNear) && !(w * kLineGuardX < std::fabs(clip[0])) && !(w * kLineGuardY < std::fabs(clip[1]));
+                    ends[e] = {clip[0] / w, clip[1] / w, clip[2] / w};
+                }
+                if (visible)
+                    segment(ends[0], ends[1], guest<uint32_t>(rdram, record + 0x18), guest<uint32_t>(rdram, record + 0x1c), batch.vertices);
+            }
+            if (!batch.vertices.empty())
+                g_batches.push_back(std::move(batch));
+            const uint32_t zero = 0;
+            std::memcpy(rdram + ((getRegU32(ctx, 28) + uint32_t(kLineCount)) & kRamMask), &zero, sizeof(zero));
         }
 
         void drawPS(uint8_t *rdram, R5900Context *ctx, Runtime *)
@@ -451,6 +489,7 @@ namespace con::particles
     {
         runtime.registerFunction(kDrawPS, &drawPS);
         runtime.registerFunction(kDrawSingleParticles, &drawSingleParticles);
+        runtime.registerFunction(kDrawLines, &drawLines);
     }
 
     void submit()
