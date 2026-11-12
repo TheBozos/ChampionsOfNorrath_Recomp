@@ -20,6 +20,7 @@ namespace con::overlay
         constexpr uint32_t kTextureDrawColor = 0x0016e658u;
         constexpr uint32_t kFontPrint = 0x00173958u, kFontScissor = 0x00172e88u;
         constexpr uint32_t kTextureDrawSuperColor = 0x0016e860u, kTextureDrawFloat = 0x0016d978u;
+        constexpr uint32_t kRectangleDraw = 0x0016ec08u;
         constexpr uint32_t kFontEnd = 0x00172f88u;
         constexpr int32_t kFontsSkipped = -0x1324;
         constexpr int32_t kScreenRed = -0x35c4, kScreenGreen = -0x35c0, kScreenBlue = -0x35bc;
@@ -157,6 +158,14 @@ namespace con::overlay
             ctx->pc = getRegU32(ctx, 31);
         }
 
+        void rectangleDraw(uint8_t *, R5900Context *ctx, Runtime *)
+        {
+            const float x0 = float(int32_t(getRegU32(ctx, 4))), y0 = float(int32_t(getRegU32(ctx, 5)));
+            const float x1 = float(int32_t(getRegU32(ctx, 6))), y1 = float(int32_t(getRegU32(ctx, 7)));
+            drawQuad(g_pending, nullptr, int32_t(getRegU32(ctx, 8)), Clip{}, x0, y0, x1, y1, 0, 0, 0, 0, getRegU32(ctx, 9));
+            ctx->pc = getRegU32(ctx, 31);
+        }
+
         void fontEnd(uint8_t *rdram, R5900Context *ctx, Runtime *)
         {
             if (!(gpWord(rdram, ctx, kFontsSkipped) & 0xff))
@@ -291,10 +300,15 @@ namespace con::overlay
             std::stable_sort(g_pending.begin(), g_pending.end(), [](const Pending &a, const Pending &b) { return a.layer < b.layer; });
             for (const Pending &pending : g_pending) {
                 bozo::render::Material material;
-                material.tex0 = pending.texture->key;
                 material.blend = bozo::render::Material::Blend::Alpha;
-                material.alphaTest = true;
-                material.alphaRef = 1;
+                if (pending.texture) {
+                    material.tex0 = pending.texture->key;
+                    material.alphaTest = true;
+                    material.alphaRef = 1;
+                } else {
+                    material.textured = false;
+                    material.directColour = true;
+                }
                 material.depthTest = false;
                 material.depthWrite = false;
                 material.clampU = material.clampV = true;
@@ -319,5 +333,6 @@ namespace con::overlay
         runtime.registerFunction(kFontEnd, &fontEnd);
         runtime.registerFunction(kTextureDrawSuperColor, &textureDrawSuperColor);
         runtime.registerFunction(kTextureDrawFloat, &textureDrawFloat);
+        runtime.registerFunction(kRectangleDraw, &rectangleDraw);
     }
 }
