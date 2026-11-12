@@ -31,6 +31,8 @@ namespace con::textures
     // A lump's texture as the game holds it in memory: its 0x80-byte header, then the upload the file stores.
     bool decodeLump(const uint8_t *rdram, uint32_t address, bozo::render::Texture &out);
 
+    uint64_t lumpKey(const uint8_t *rdram, uint32_t address);
+
     // A model's GS ALPHA register value (its .vif header +0x18) as the renderer's blend: the texture's alpha is turned the
     // way that blend reads it.
     void modelBlend(uint64_t alpha, bozo::render::Texture &texture, bozo::render::Material &material);

@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace con::particles
@@ -18,7 +20,11 @@ namespace con::particles
     namespace
     {
         constexpr uint32_t kRamMask = 0x1ffffffu;
-        constexpr uint32_t kDrawPS = 0x00185c38u;
+        constexpr uint32_t kDrawPS = 0x00185c38u, kDrawSingleParticles = 0x001820f8u;
+        constexpr uint32_t kView = 0x0037ef00u, kFaceRecords = 0x006ec880u;
+        constexpr int32_t kFaceCount = -0xff8;
+        constexpr uint16_t kRotated = 0x1, kAdditive = 0x2;
+        constexpr size_t kMaxFaceTextures = 256;
         constexpr uint32_t kMainSystem = 0x0037f730u, kViewProjection = 0x0037ef30u, kLifetimes = 0x0037f720u;
         constexpr uint32_t kPages = 0x00780080u, kPageData = 0x00700080u, kTypes = 0x00780300u, kNow = 0x004869f4u;
         constexpr uint32_t kAtlasMap = 0x006ec800u;
@@ -38,6 +44,7 @@ namespace con::particles
         {
             bozo::render::Material material;
             std::vector<bozo::render::Vertex> vertices;
+            std::shared_ptr<const bozo::render::Texture> texture;
         };
 
         std::vector<Batch> g_batches;
@@ -235,21 +242,118 @@ namespace con::particles
                                  else
                                      sprite(rdram, m, p, width, height, batch.vertices);
                              });
+                if (pass != 2)
+                    batch.texture = g_atlas;
                 if (!batch.vertices.empty())
                     g_batches.push_back(std::move(batch));
             }
         }
+
+        std::unordered_map<uint64_t, std::shared_ptr<const bozo::render::Texture>> g_faceTextures;
+
+        std::shared_ptr<const bozo::render::Texture> faceTexture(const uint8_t *rdram, uint32_t lump)
+        {
+            const uint64_t key = con::textures::lumpKey(rdram, lump);
+            if (const auto found = g_faceTextures.find(key); found != g_faceTextures.end())
+                return found->second;
+            auto texture = std::make_shared<bozo::render::Texture>();
+            if (!con::textures::decodeLump(rdram, lump, *texture) || !texture->width || !texture->height)
+                return nullptr;
+            texture->key = key;
+            texture->version = 1;
+            if (g_faceTextures.size() >= kMaxFaceTextures)
+                g_faceTextures.clear();
+            g_faceTextures[key] = texture;
+            return texture;
+        }
+
+        void faceSprite(const uint8_t *rdram, uint32_t record, const bozo::render::Texture &texture,
+                        std::vector<bozo::render::Vertex> &out)
+        {
+            Matrix m;
+            std::memcpy(m.data(), rdram + kViewProjection, sizeof(m));
+            const float radius = guest<float>(rdram, record + 0x10), size = guest<float>(rdram, record + 0xc);
+            std::array<float, 3> p{};
+            for (uint32_t k = 0; k < 3; ++k)
+                p[k] = guest<float>(rdram, record + k * 4) - guest<float>(rdram, kView + 8 + k * 12) * radius;
+            const auto clip = project(m, p);
+            const float depth = clip[3] + radius;
+            if (depth < 20.0f || std::fabs(clip[0]) > depth * 700.0f || std::fabs(clip[1]) > depth * 300.0f)
+                return;
+            const float x = clip[0] / depth, y = clip[1] / depth, z = clip[2] / clip[3], half = size / depth;
+            const uint32_t colour = guest<uint32_t>(rdram, record + 0x14);
+            const float u0 = 1.0f / float(texture.width), v0 = 1.0f / float(texture.height);
+            const float u1 = float(texture.width - 1) / float(texture.width), v1 = float(texture.height - 1) / float(texture.height);
+            const auto vertex = [&](float vx, float vy, float u, float v) {
+                bozo::render::Vertex out;
+                out.x = vx;
+                out.y = vy;
+                out.z = z;
+                out.u = u;
+                out.v = v;
+                out.rgba = colour;
+                return out;
+            };
+            if (guest<uint16_t>(rdram, record + 0x1e) & kRotated) {
+                const float angle = float(guest<int16_t>(rdram, record + 0x1c)) * (6.28318531f / 65536.0f);
+                const float c = std::cos(angle) * half, s = std::sin(angle) * half;
+                const auto a = vertex(x - 2 * c, y - s, u0, v0), b = vertex(x + 2 * s, y - c, u1, v0),
+                           d = vertex(x - 2 * s, y + c, u0, v1), e = vertex(x + 2 * c, y + s, u1, v1);
+                out.insert(out.end(), {a, b, d, b, d, e});
+                return;
+            }
+            const auto a = vertex(x - 2 * half, y - half, u0, v0), b = vertex(x + 2 * half, y - half, u1, v0),
+                       c = vertex(x + 2 * half, y + half, u1, v1), d = vertex(x - 2 * half, y + half, u0, v1);
+            out.insert(out.end(), {a, b, c, a, c, d});
+        }
+
+        void drawSingleParticles(uint8_t *rdram, R5900Context *ctx, Runtime *)
+        {
+            ctx->pc = getRegU32(ctx, 31);
+            const uint32_t pass = getRegU32(ctx, 4);
+            const int32_t count = int32_t(guest<uint32_t>(rdram, getRegU32(ctx, 28) + uint32_t(kFaceCount)));
+            std::vector<std::pair<uint64_t, size_t>> open;
+            for (int32_t i = 0; i < count && i < 0x400; ++i) {
+                const uint32_t record = kFaceRecords + uint32_t(i) * 0x20u;
+                const uint32_t lump = guest<uint32_t>(rdram, record + 0x18);
+                const uint16_t flags = guest<uint16_t>(rdram, record + 0x1e);
+                if (!lump || (flags >> 2 & 1u) != pass)
+                    continue;
+                std::memset(rdram + ((record + 0x18) & kRamMask), 0, 4);
+                const auto texture = faceTexture(rdram, lump);
+                if (!texture)
+                    continue;
+                const uint64_t group = uint64_t(lump) << 16 | flags;
+                auto found = std::find_if(open.begin(), open.end(), [&](const auto &o) { return o.first == group; });
+                if (found == open.end()) {
+                    Batch batch;
+                    batch.texture = texture;
+                    batch.material.tex0 = texture->key;
+                    batch.material.blend = flags & kAdditive ? bozo::render::Material::Blend::Additive : bozo::render::Material::Blend::Alpha;
+                    batch.material.depthWrite = false;
+                    g_batches.push_back(std::move(batch));
+                    found = open.insert(open.end(), {group, g_batches.size() - 1});
+                }
+                faceSprite(rdram, record, *texture, g_batches[found->second].vertices);
+            }
+            for (auto it = open.rbegin(); it != open.rend(); ++it)
+                if (g_batches[it->second].vertices.empty())
+                    g_batches.erase(g_batches.begin() + std::ptrdiff_t(it->second));
+        }
     }
 
-    void install(bozo::port::Registry &runtime) { runtime.registerFunction(kDrawPS, &drawPS); }
+    void install(bozo::port::Registry &runtime)
+    {
+        runtime.registerFunction(kDrawPS, &drawPS);
+        runtime.registerFunction(kDrawSingleParticles, &drawSingleParticles);
+    }
 
     void submit()
     {
         static constexpr float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         auto &renderer = bozo::render::Renderer::instance();
         for (const Batch &batch : g_batches)
-            renderer.draw(batch.material, kIdentity, batch.vertices.data(), uint32_t(batch.vertices.size()),
-                          batch.material.textured ? g_atlas : nullptr);
+            renderer.draw(batch.material, kIdentity, batch.vertices.data(), uint32_t(batch.vertices.size()), batch.texture);
     }
 
     size_t pending() { return g_batches.size(); }
