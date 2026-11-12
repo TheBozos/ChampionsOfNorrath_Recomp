@@ -34,6 +34,14 @@ namespace con::textures
     uint64_t lumpKey(const uint8_t *rdram, uint32_t address);
     uint32_t findResource(const uint8_t *rdram, uint32_t gp, const char *lumpName, const char *name);
 
+    // A ResourceMap's texture once the game has resolved it for the current lump generation, decoded when its lump changes.
+    struct Mapped
+    {
+        std::shared_ptr<const bozo::render::Texture> texture;
+        uint32_t lump = 0;
+    };
+    const bozo::render::Texture *mapped(const uint8_t *rdram, uint32_t gp, uint32_t map, Mapped &cache);
+
     // A model's GS ALPHA register value (its .vif header +0x18) as the renderer's blend: the texture's alpha is turned the
     // way that blend reads it.
     void modelBlend(uint64_t alpha, bozo::render::Texture &texture, bozo::render::Material &material);

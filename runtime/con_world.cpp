@@ -2,6 +2,7 @@
 #include "con_world.h"
 
 #include "con_characters.h"
+#include "con_decals.h"
 #include "con_lights.h"
 #include "con_particles.h"
 #include "con_shadows.h"
@@ -653,7 +654,7 @@ namespace con::world
     void endFrame(uint32_t clearColour)
     {
         ++g_frames;
-        if (g_queue.empty() && g_water.empty() && !(clearColour & 0x00ffffffu) && !g_published && !con::characters::pending() && !con::particles::pending() && !con::shadows::pending())
+        if (g_queue.empty() && g_water.empty() && !(clearColour & 0x00ffffffu) && !g_published && !con::characters::pending() && !con::particles::pending() && !con::shadows::pending() && !con::decals::pending())
             return;
         auto &renderer = bozo::render::Renderer::instance();
         bozo::render::Screen screen;
@@ -702,6 +703,7 @@ namespace con::world
                                   queued.mesh->texture);
                 }
             if (!late) {
+                con::decals::submit();
                 con::shadows::submit();
                 con::characters::submit(false);
                 for (const Water &water : g_water)
@@ -711,10 +713,11 @@ namespace con::world
         }
         con::particles::submit();
         renderer.endFrame();
-        g_published = !g_queue.empty() || !g_water.empty() || con::characters::pending() || con::particles::pending() || con::shadows::pending();
+        g_published = !g_queue.empty() || !g_water.empty() || con::characters::pending() || con::particles::pending() || con::shadows::pending() || con::decals::pending();
         con::characters::clear();
         con::particles::clear();
         con::shadows::clear();
+        con::decals::clear();
         g_water.clear();
         g_queue.clear();
     }

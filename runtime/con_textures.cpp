@@ -413,7 +413,7 @@ namespace con::textures
     namespace
     {
         constexpr uint32_t kLumps = 0x006cb280u;
-        constexpr int32_t kLumpCount = -0x3a64;
+        constexpr int32_t kLumpCount = -0x3a64, kGeneration = -0x3a68;
 
         uint32_t word(const uint8_t *rdram, uint32_t address)
         {
@@ -433,6 +433,26 @@ namespace con::textures
             }
             return out;
         }
+    }
+
+    const bozo::render::Texture *mapped(const uint8_t *rdram, uint32_t gp, uint32_t map, Mapped &cache)
+    {
+        if (word(rdram, map) != word(rdram, gp + uint32_t(kGeneration)))
+            return nullptr;
+        const uint32_t lump = word(rdram, map + 0xc);
+        if (!lump)
+            return nullptr;
+        if (lump != cache.lump || !cache.texture) {
+            cache.texture.reset();
+            cache.lump = lump;
+            bozo::render::Texture decoded;
+            if (!decodeLump(rdram, lump, decoded) || !decoded.width || !decoded.height)
+                return nullptr;
+            decoded.key = 0x5041525400000000ull | lump;
+            decoded.version = 1;
+            cache.texture = std::make_shared<bozo::render::Texture>(std::move(decoded));
+        }
+        return cache.texture.get();
     }
 
     uint32_t findResource(const uint8_t *rdram, uint32_t gp, const char *lumpName, const char *name)

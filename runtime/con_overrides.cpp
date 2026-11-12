@@ -1,3 +1,4 @@
+#include "con_decals.h"
 #include "con_particles.h"
 #include "con_water.h"
 
@@ -87,6 +88,7 @@ namespace
         con::vu0::install(runtime);
         con::movies::install(runtime);
         con::particles::install(runtime);
+        con::decals::install(runtime);
         runtime.registerFunction(kWaterStep, &waterStep);
         runtime.registerFunction(kInitVif, &returnVoid);
         runtime.registerFunction(kLgKbMInit, &keyboardAbsent);

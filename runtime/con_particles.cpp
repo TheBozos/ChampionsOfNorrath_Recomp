@@ -32,7 +32,6 @@ namespace con::particles
         constexpr uint8_t kTrailPairs = 0x2, kTrailAdditive = 0x4, kTrailMultiply = 0x8;
         constexpr float kGuardX = 800.0f, kGuardY = 400.0f;
         constexpr uint32_t kLocalMatrix = 0x100u;
-        constexpr int32_t kGeneration = -0x3a68;
         constexpr float kColourBias = 8388608.0f;
 
         template <typename T>
@@ -51,34 +50,7 @@ namespace con::particles
         };
 
         std::vector<Batch> g_batches;
-        struct Mapped
-        {
-            std::shared_ptr<const bozo::render::Texture> texture;
-            uint32_t lump = 0;
-        };
-
-        Mapped g_atlas, g_trail;
-
-        const bozo::render::Texture *mapped(const uint8_t *rdram, const R5900Context *ctx, uint32_t map, Mapped &cache)
-        {
-            const uint32_t generation = guest<uint32_t>(rdram, getRegU32(ctx, 28) + uint32_t(kGeneration));
-            if (guest<uint32_t>(rdram, map) != generation)
-                return nullptr;
-            const uint32_t lump = guest<uint32_t>(rdram, map + 0xc);
-            if (!lump)
-                return nullptr;
-            if (lump != cache.lump || !cache.texture) {
-                cache.texture.reset();
-                cache.lump = lump;
-                bozo::render::Texture decoded;
-                if (!con::textures::decodeLump(rdram, lump, decoded) || !decoded.width || !decoded.height)
-                    return nullptr;
-                decoded.key = 0x5041525400000000ull | lump;
-                decoded.version = 1;
-                cache.texture = std::make_shared<bozo::render::Texture>(std::move(decoded));
-            }
-            return cache.texture.get();
-        }
+        con::textures::Mapped g_atlas, g_trail;
 
         using Matrix = std::array<float, 16>;
 
@@ -227,7 +199,7 @@ namespace con::particles
         void drawPS(uint8_t *rdram, R5900Context *ctx, Runtime *)
         {
             ctx->pc = getRegU32(ctx, 31);
-            const auto *texture = mapped(rdram, ctx, kAtlasMap, g_atlas);
+            const auto *texture = con::textures::mapped(rdram, getRegU32(ctx, 28), kAtlasMap, g_atlas);
             if (!texture)
                 return;
             const uint32_t system = getRegU32(ctx, 5);
@@ -352,7 +324,7 @@ namespace con::particles
 
     void drawTrails(const uint8_t *rdram, const R5900Context *ctx)
     {
-        const auto *texture = mapped(rdram, ctx, kTrailMap, g_trail);
+        const auto *texture = con::textures::mapped(rdram, getRegU32(ctx, 28), kTrailMap, g_trail);
         if (!texture)
             return;
         Matrix m;
