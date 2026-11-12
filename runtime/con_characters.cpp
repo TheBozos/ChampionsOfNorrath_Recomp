@@ -24,6 +24,8 @@ namespace con::characters
         constexpr uint32_t kRamMask = 0x1ffffffu, kMaxJoints = 64, kEnvironmentProgram = 0x44;
         // matMakeCharViewMatrix scales the depth row by 16 x 2^46 over matMakeViewMatrix's.
         constexpr float kCharacterDepth = 1.0f / 1125899906842624.0f;
+        constexpr int32_t kModelOptions = -0x3964;
+        constexpr uint32_t kNoDepthWrite = 0x1, kNoColourWrite = 0x8, kNoDepthTest = 0x20;
 
         template <typename T>
         T guest(const uint8_t *rdram, uint32_t address)
@@ -237,6 +239,7 @@ namespace con::characters
             std::shared_ptr<const bozo::render::Texture> texture;
             bozo::render::Material material;
             std::array<float, 16> matrix{};
+            bool background = false;
         };
 
         std::unordered_map<uint64_t, std::unique_ptr<Model>> g_models;
@@ -285,6 +288,8 @@ namespace con::characters
             Joints joints{};
             std::array<float, 16> matrix{};
             Lights lights;
+            uint32_t options = 0;
+            bool background = false;
         };
 
         std::unordered_map<uint32_t, Parent> g_parents;
@@ -315,7 +320,7 @@ namespace con::characters
             return joints;
         }
 
-        void emit(const uint8_t *rdram, uint32_t gp, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
+        void emit(const uint8_t *rdram, uint32_t gp, const Parent &style, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
                   const std::array<float, 16> &matrix, const Lights &lights);
     }
 
@@ -326,11 +331,13 @@ namespace con::characters
         parent.joints = readPose(rdram, state);
         const uint32_t stack = getRegU32(ctx, 29);
         std::memcpy(parent.matrix.data(), rdram + ((stack + 0x20u) & kRamMask), sizeof(parent.matrix));
+        parent.options = guest<uint32_t>(rdram, getRegU32(ctx, 28) + uint32_t(kModelOptions));
+        parent.background = guest<int32_t>(rdram, stack + 0x70u) == 0;
         for (const uint32_t i : {2u, 6u, 10u, 14u})
             parent.matrix[i] *= kCharacterDepth;
         parent.lights = con::lights::forCharacter(rdram, getRegU32(ctx, 28),
                                  {guest<float>(rdram, stack), guest<float>(rdram, stack + 4), guest<float>(rdram, stack + 8)});
-        emit(rdram, getRegU32(ctx, 28), vif, tex, getRegU64(ctx, 21), parent.joints, parent.matrix, parent.lights);
+        emit(rdram, getRegU32(ctx, 28), parent, vif, tex, getRegU64(ctx, 21), parent.joints, parent.matrix, parent.lights);
     }
 
     // A part worn or held by the model drawn last with that parent: worn parts (attach slot -1) take the parent's joints,
@@ -344,7 +351,7 @@ namespace con::characters
         const Parent &parent = found->second;
         const int8_t slot = guest<int8_t>(rdram, part + 0x13);
         if (slot < 0) {
-            emit(rdram, getRegU32(ctx, 28), part, tex, getRegU64(ctx, 18), parent.joints, parent.matrix, parent.lights);
+            emit(rdram, getRegU32(ctx, 28), parent, part, tex, getRegU64(ctx, 18), parent.joints, parent.matrix, parent.lights);
             return;
         }
         const uint32_t table = parentVif + uint32_t(guest<uint8_t>(rdram, parentVif + 0x22)) * 16u + uint32_t(slot) * 0x34u;
@@ -364,12 +371,12 @@ namespace con::characters
         }
         Joints joints;
         joints.fill(attached);
-        emit(rdram, getRegU32(ctx, 28), part, tex, getRegU64(ctx, 18), joints, parent.matrix, parent.lights);
+        emit(rdram, getRegU32(ctx, 28), parent, part, tex, getRegU64(ctx, 18), joints, parent.matrix, parent.lights);
     }
 
     namespace
     {
-    void emit(const uint8_t *rdram, uint32_t gp, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
+    void emit(const uint8_t *rdram, uint32_t gp, const Parent &style, uint32_t vif, uint32_t tex, uint64_t shown, const Joints &joints,
               const std::array<float, 16> &matrix, const Lights &lights)
     {
         if (!vif || !tex)
@@ -465,6 +472,15 @@ namespace con::characters
                 }
             }
         }
+        for (Draw *draw : {&e, &d}) {
+            draw->background = style.background;
+            if (style.options & kNoDepthWrite)
+                draw->material.depthWrite = false;
+            if (style.options & kNoDepthTest)
+                draw->material.depthTest = false;
+            if (style.options & kNoColourWrite)
+                draw->material.colourMask = 0;
+        }
         if (!e.vertices.empty())
             g_draws.push_back(std::move(e));
         if (!d.vertices.empty())
@@ -472,11 +488,12 @@ namespace con::characters
     }
     }
 
-    void submit()
+    void submit(bool background)
     {
         auto &renderer = bozo::render::Renderer::instance();
         for (const Draw &d : g_draws)
-            renderer.draw(d.material, d.matrix.data(), d.vertices.data(), uint32_t(d.vertices.size()), d.texture);
+            if (d.background == background)
+                renderer.draw(d.material, d.matrix.data(), d.vertices.data(), uint32_t(d.vertices.size()), d.texture);
     }
 
     size_t pending() { return g_draws.size(); }

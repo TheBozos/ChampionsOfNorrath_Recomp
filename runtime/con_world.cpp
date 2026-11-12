@@ -550,6 +550,7 @@ namespace con::world
                                                   corner(640, -224), corner(640, 224), corner(-640, 224)};
             renderer.draw(material, kIdentity, quad, 6u);
         }
+        con::characters::submit(true);
         for (const bool late : {false, true}) {
             for (const Queued &queued : g_queue)
                 if (queued.mesh->late == late && !queued.mesh->vertices.empty()) {
@@ -570,7 +571,7 @@ namespace con::world
                 }
             if (!late) {
                 con::shadows::submit();
-                con::characters::submit();
+                con::characters::submit(false);
             }
         }
         con::particles::submit();
