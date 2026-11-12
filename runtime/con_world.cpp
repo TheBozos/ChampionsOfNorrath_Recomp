@@ -4,6 +4,7 @@
 #include "con_characters.h"
 #include "con_lights.h"
 #include "con_particles.h"
+#include "con_shadows.h"
 #include "con_textures.h"
 
 #include "bozo/context.h"
@@ -437,7 +438,7 @@ namespace con::world
 
     void endFrame()
     {
-        if (g_queue.empty() && !g_published && !con::characters::pending() && !con::particles::pending())
+        if (g_queue.empty() && !g_published && !con::characters::pending() && !con::particles::pending() && !con::shadows::pending())
             return;
         auto &renderer = bozo::render::Renderer::instance();
         bozo::render::Screen screen;
@@ -454,14 +455,17 @@ namespace con::world
                     renderer.draw(queued.mesh->material, queued.matrix.data(), vertices.data(), uint32_t(vertices.size()),
                                   queued.mesh->texture);
                 }
-            if (!late)
+            if (!late) {
+                con::shadows::submit();
                 con::characters::submit();
+            }
         }
         con::particles::submit();
         renderer.endFrame();
-        g_published = !g_queue.empty() || con::characters::pending() || con::particles::pending();
+        g_published = !g_queue.empty() || con::characters::pending() || con::particles::pending() || con::shadows::pending();
         con::characters::clear();
         con::particles::clear();
+        con::shadows::clear();
         g_queue.clear();
     }
 }

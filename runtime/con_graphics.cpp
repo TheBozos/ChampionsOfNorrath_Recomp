@@ -2,6 +2,7 @@
 #include "con_characters.h"
 #include "con_overlay.h"
 #include "con_particles.h"
+#include "con_shadows.h"
 #include "con_world.h"
 
 #include "bozo/app/frame_pacer.h"
@@ -23,6 +24,8 @@ namespace con::graphics
             0x0015f914u, 0x0015f918u, 0x0015fa30u, 0x0015fa34u,
             // engineInit: T1_MODE (an hblank line counter only movies read).
             0x00190874u,
+            // modelDrawShadow after its light loop: the shadows drawn natively, the packet load kept.
+            0x0016ab70u,
             // drawTrails once its lightning bolts are moved: the trails drawn natively, the packet load kept.
             0x00185424u,
             // drawWorldPolyset's geometry path, drawn natively (the function then exits, $5 = 0 being no texture cell).
@@ -92,6 +95,12 @@ namespace con::graphics
                 uint32_t frame;
                 std::memcpy(&frame, ram + ((getRegU32(ctx, 28) - 0x3528u) & 0x1ffffffu), 4);
                 setRegU64(ctx, 2, int64_t(int32_t(frame)));
+            }
+            else if (pc == 0x0016ab70u) {
+                con::shadows::draw(ram, ctx);
+                uint32_t packet;
+                std::memcpy(&packet, ram + ((getRegU32(ctx, 29) + 0x90u) & 0x1ffffffu), 4);
+                setRegU64(ctx, 3, int64_t(int32_t(packet)));
             }
             else if (pc == 0x00185424u) {
                 con::particles::drawTrails(ram, ctx);
