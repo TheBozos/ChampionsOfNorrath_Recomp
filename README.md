@@ -38,7 +38,7 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 | A window held to real time | 🔧 runs at 60 frames a second, into the hub level Kelethin |
 | Frame loop on the PC clock, no vblank pacing | 🔧 frames held to the PC clock; the game's vblank waits are still there |
 | Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; drawn on the level's geometry |
-| 3D: native meshes | 🔧 level geometry, scenery models and lit, skinned characters with their equipment and particle sprites (torch fire, embers, glows) draw with the game's camera, spark lines, glow halos and weapon trails included, character shadows and environment-mapped surfaces, and water tiles |
+| 3D: native meshes | 🔧 level geometry lit by the level's point lights (torch pools on the floors), scenery models and lit, skinned characters with their equipment and particle sprites (torch fire, embers, glows) draw with the game's camera, spark lines, glow halos and weapon trails included, character shadows and environment-mapped surfaces, and water tiles |
 | 2D, menus and HUD | 🔧 the game's sprite and font calls drawn natively, menus, dialogs, slider and highlight boxes, cinematic letterbox bars and screen fades show |
 | Movies | 🔧 decoded by BozoEngine (libmpeg) and shown as the window's backdrop; not exercised yet |
 | Window | ⏳ |
