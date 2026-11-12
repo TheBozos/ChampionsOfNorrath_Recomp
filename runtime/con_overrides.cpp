@@ -22,6 +22,11 @@ namespace con::vu0
     void install(bozo::port::Registry &runtime);
 }
 
+namespace con::movies
+{
+    void install(bozo::port::Registry &runtime);
+}
+
 namespace
 {
     constexpr uint32_t kConEntry = 0x00100008u;
@@ -80,6 +85,7 @@ namespace
         con::graphics::install(runtime);
         con::overlay::install(runtime);
         con::vu0::install(runtime);
+        con::movies::install(runtime);
         con::particles::install(runtime);
         runtime.registerFunction(kWaterStep, &waterStep);
         runtime.registerFunction(kInitVif, &returnVoid);
