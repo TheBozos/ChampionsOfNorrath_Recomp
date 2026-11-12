@@ -20,7 +20,10 @@ namespace con::particles
     namespace
     {
         constexpr uint32_t kRamMask = 0x1ffffffu;
-        constexpr uint32_t kDrawPS = 0x00185c38u, kDrawSingleParticles = 0x001820f8u;
+        constexpr uint32_t kDrawPS = 0x00185c38u, kDrawSingleParticles = 0x001820f8u, kDrawLines = 0x00184cd8u;
+        constexpr uint32_t kLines = 0x006f4880u, kLineSize = 0x24u, kMaxLines = 0x80u;
+        constexpr int32_t kLineCount = -0xff4;
+        constexpr float kLineNear = 20.0f, kLineGuardX = 1400.0f, kLineGuardY = 1000.0f;
         constexpr uint32_t kView = 0x0037ef00u, kFaceRecords = 0x006ec880u;
         constexpr int32_t kFaceCount = -0xff8;
         constexpr uint16_t kRotated = 0x1, kAdditive = 0x2;
@@ -152,6 +155,23 @@ namespace con::particles
             out.insert(out.end(), {a, b, c, a, c, d});
         }
 
+        void segment(const std::array<float, 3> &head, const std::array<float, 3> &tail, uint32_t headColour, uint32_t tailColour,
+                     std::vector<bozo::render::Vertex> &out)
+        {
+            const float dx = (tail[0] - head[0]) * 0.5f, dy = tail[1] - head[1], length = std::sqrt(dx * dx + dy * dy);
+            const float nx = length > 0.0f ? -dy / length : 0.0f, ny = length > 0.0f ? dx / length : 1.0f;
+            const auto end = [&](const std::array<float, 3> &at, uint32_t colour, float side) {
+                bozo::render::Vertex vertex;
+                vertex.x = at[0] + side * nx;
+                vertex.y = at[1] + side * ny * 0.5f;
+                vertex.z = at[2];
+                vertex.rgba = colour;
+                return vertex;
+            };
+            const auto a = end(head, headColour, -1), b = end(head, headColour, 1), c = end(tail, tailColour, 1), d = end(tail, tailColour, -1);
+            out.insert(out.end(), {a, b, c, a, c, d});
+        }
+
         void line(const uint8_t *rdram, const Matrix &m, const Particle &p, std::vector<bozo::render::Vertex> &out)
         {
             const float gravity = guest<float>(rdram, p.type), lag = guest<float>(rdram, p.type + 12);
@@ -161,20 +181,8 @@ namespace con::particles
             const uint32_t colour = colourAt(rdram, p.type, p.age);
             if (!(colour >> 24))
                 return;
-            const float hx = head[0] / head[3], hy = head[1] / head[3], tx = tail[0] / tail[3], ty = tail[1] / tail[3];
-            const float dx = (tx - hx) * 0.5f, dy = ty - hy, length = std::sqrt(dx * dx + dy * dy);
-            const float nx = length > 0.0f ? -dy / length : 0.0f, ny = length > 0.0f ? dx / length : 1.0f;
-            const auto end = [&](float x, float y, float z, float side) {
-                bozo::render::Vertex vertex;
-                vertex.x = x + side * nx;
-                vertex.y = y + side * ny * 0.5f;
-                vertex.z = z;
-                vertex.rgba = colour;
-                return vertex;
-            };
-            const float hz = head[2] / head[3], tz = tail[2] / tail[3];
-            const auto a = end(hx, hy, hz, -1), b = end(hx, hy, hz, 1), c = end(tx, ty, tz, 1), d = end(tx, ty, tz, -1);
-            out.insert(out.end(), {a, b, c, a, c, d});
+            segment({head[0] / head[3], head[1] / head[3], head[2] / head[3]}, {tail[0] / tail[3], tail[1] / tail[3], tail[2] / tail[3]},
+                    colour, colour, out);
         }
 
         template <typename Emit>
@@ -196,6 +204,53 @@ namespace con::particles
             }
         }
 
+        bozo::render::Material untexturedLines()
+        {
+            bozo::render::Material material;
+            material.tex0 = 0;
+            material.textured = false;
+            material.directColour = true;
+            material.blend = bozo::render::Material::Blend::Additive;
+            material.depthWrite = false;
+            material.nearest = true;
+            return material;
+        }
+
+        // P_Line's lines (web strands and the like): pulled towards the camera by their width, kept as one-pixel lines.
+        void drawLines(uint8_t *rdram, R5900Context *ctx, Runtime *)
+        {
+            ctx->pc = getRegU32(ctx, 31);
+            const uint32_t count = guest<uint32_t>(rdram, getRegU32(ctx, 28) + uint32_t(kLineCount));
+            if (!count)
+                return;
+            Matrix m;
+            std::memcpy(m.data(), rdram + kViewProjection, sizeof(m));
+            const std::array<float, 3> forward{guest<float>(rdram, kView + 0x8), guest<float>(rdram, kView + 0x14), guest<float>(rdram, kView + 0x20)};
+            Batch batch;
+            batch.material = untexturedLines();
+            for (uint32_t i = 0; i < count && i < kMaxLines; ++i) {
+                const uint32_t record = kLines + i * kLineSize;
+                const float width = guest<float>(rdram, record + 0x20);
+                std::array<std::array<float, 3>, 2> ends;
+                bool visible = true;
+                for (uint32_t e = 0; e < 2 && visible; ++e) {
+                    std::array<float, 3> p;
+                    for (uint32_t k = 0; k < 3; ++k)
+                        p[k] = guest<float>(rdram, record + e * 0xc + k * 4) - forward[k] * width;
+                    const auto clip = project(m, p);
+                    const float w = clip[3] + width;
+                    visible = !(w < kLineNear) && !(w * kLineGuardX < std::fabs(clip[0])) && !(w * kLineGuardY < std::fabs(clip[1]));
+                    ends[e] = {clip[0] / w, clip[1] / w, clip[2] / w};
+                }
+                if (visible)
+                    segment(ends[0], ends[1], guest<uint32_t>(rdram, record + 0x18), guest<uint32_t>(rdram, record + 0x1c), batch.vertices);
+            }
+            if (!batch.vertices.empty())
+                g_batches.push_back(std::move(batch));
+            const uint32_t zero = 0;
+            std::memcpy(rdram + ((getRegU32(ctx, 28) + uint32_t(kLineCount)) & kRamMask), &zero, sizeof(zero));
+        }
+
         void drawPS(uint8_t *rdram, R5900Context *ctx, Runtime *)
         {
             ctx->pc = getRegU32(ctx, 31);
@@ -208,12 +263,14 @@ namespace con::particles
             const float width = float(texture->width), height = float(texture->height);
             for (uint32_t pass = 0; pass < 3; ++pass) {
                 Batch batch;
-                batch.material.tex0 = pass == 2 ? 0 : texture->key;
-                batch.material.textured = pass != 2;
-                batch.material.directColour = pass == 2;
-                batch.material.blend = pass ? bozo::render::Material::Blend::Additive : bozo::render::Material::Blend::Alpha;
-                batch.material.depthWrite = false;
-                batch.material.nearest = true;
+                if (pass == 2) {
+                    batch.material = untexturedLines();
+                } else {
+                    batch.material.tex0 = texture->key;
+                    batch.material.blend = pass ? bozo::render::Material::Blend::Additive : bozo::render::Material::Blend::Alpha;
+                    batch.material.depthWrite = false;
+                    batch.material.nearest = true;
+                }
                 for (uint32_t k = 0; k < 4; ++k)
                     drawList(rdram, system + pass * 0x40u + k * 0x10u, now, guest<int32_t>(rdram, kLifetimes + k * 4u),
                              [&](const Particle &p) {
@@ -432,6 +489,7 @@ namespace con::particles
     {
         runtime.registerFunction(kDrawPS, &drawPS);
         runtime.registerFunction(kDrawSingleParticles, &drawSingleParticles);
+        runtime.registerFunction(kDrawLines, &drawLines);
     }
 
     void submit()
