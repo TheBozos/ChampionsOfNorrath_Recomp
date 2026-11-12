@@ -56,12 +56,17 @@ namespace con::world
             std::array<float, 3> position{};
             uint32_t lighting = 0;
             bool environment = false;
+            std::vector<std::array<float, 3>> local, stored;
+            std::array<float, 3> low{}, high{};
+            std::vector<bozo::render::Vertex> lit;
+            con::lights::ChunkLights litBy;
         };
 
         struct Queued
         {
             const Mesh *mesh = nullptr;
             std::vector<bozo::render::Vertex> shaded;
+            const std::vector<bozo::render::Vertex> *lit = nullptr;
             std::array<float, 16> matrix{};
             std::vector<bozo::render::Vertex> environment;
         };
@@ -106,6 +111,7 @@ namespace con::world
         {
             Turn turn;
             std::vector<std::array<float, 3>> *out = nullptr;
+            std::vector<std::array<float, 3>> *local = nullptr, *stored = nullptr;
         };
 
         void addBatch(const uint8_t *rdram, const Placement &place, const Unpack (&u)[6], float width, float height,
@@ -153,6 +159,13 @@ namespace con::world
                 v.u = float(guest<uint16_t>(rdram, uv)) / 16.0f / width;
                 v.v = float(guest<uint16_t>(rdram, uv + 2)) / 16.0f / height;
                 v.rgba = 0x80808080u;
+                if (normals.local) {
+                    normals.local->push_back({float(guest<int16_t>(rdram, position)), float(guest<int16_t>(rdram, position + 2)),
+                                              float(guest<int16_t>(rdram, position + 4))});
+                    const uint32_t at3 = u[1].data + uint32_t(slot[at]) * 3;
+                    normals.stored->push_back({float(guest<int8_t>(rdram, at3)), float(guest<int8_t>(rdram, at3 + 1)),
+                                               float(guest<int8_t>(rdram, at3 + 2))});
+                }
                 if (normals.out) {
                     const uint32_t at3 = u[1].data + uint32_t(slot[at]) * 3;
                     normals.out->push_back(normals.turn({float(guest<int8_t>(rdram, at3)) / 127.0f,
@@ -328,10 +341,21 @@ namespace con::world
                 const float a = code & 1 ? -n[0] : n[0], b = code & 2 ? -n[1] : n[1];
                 return {(code & 4 ? b : a) * k, (code & 4 ? a : b) * k, n[2] * k};
             };
+            Normals normals{turn, mesh->environment ? &mesh->normals : nullptr, &mesh->local, &mesh->stored};
             decodePacket(rdram, [&](int16_t x, int16_t y, int16_t z, bozo::render::Vertex &v) { place(chunk, x, y, z, v); }, data, data + guest<uint32_t>(rdram, record + 4) * 16, float(source->width),
-                         float(source->height), mesh->vertices, mesh->environment ? Normals{turn, &mesh->normals} : Normals{});
+                         float(source->height), mesh->vertices, normals);
             if (mesh->normals.size() != mesh->vertices.size())
                 mesh->environment = false;
+            for (auto &p : mesh->local)
+                p = {(p[0] + float(chunk.tx)) / 16.0f, (p[1] + float(chunk.ty)) / 16.0f, (p[2] + float(chunk.tz)) / 16.0f};
+            if (!mesh->local.empty()) {
+                mesh->low = mesh->high = mesh->local.front();
+                for (const auto &p : mesh->local)
+                    for (uint32_t k = 0; k < 3; ++k) {
+                        mesh->low[k] = std::min(mesh->low[k], p[k]);
+                        mesh->high[k] = std::max(mesh->high[k], p[k]);
+                    }
+            }
             return mesh;
         }
     }
@@ -511,8 +535,24 @@ namespace con::world
         Queued queued;
         queued.mesh = slot.get();
         std::memcpy(queued.matrix.data(), rdram + kViewProjection, sizeof(queued.matrix));
-        if (slot->environment && environmentTexture(rdram, getRegU32(ctx, 28)))
+        if (slot->local.size() == slot->vertices.size()) {
+            const auto lights = con::lights::within(con::lights::forChunk(rdram, getRegU32(ctx, 28), record), slot->low, slot->high);
+            if (slot->lit.empty() || !(lights == slot->litBy)) {
+                static std::vector<uint32_t> colours;
+                con::lights::shade(lights, slot->local, slot->stored, colours);
+                slot->litBy = lights;
+                if (slot->lit.empty())
+                    slot->lit = slot->vertices;
+                for (size_t i = 0; i < slot->lit.size(); ++i)
+                    slot->lit[i].rgba = colours[i];
+            }
+            queued.lit = &slot->lit;
+        }
+        if (slot->environment && environmentTexture(rdram, getRegU32(ctx, 28))) {
             queued.environment = environmentVertices(rdram, getRegU32(ctx, 28), *slot, queued.matrix);
+            for (size_t i = 0; queued.lit && i < queued.lit->size() && i < queued.environment.size(); ++i)
+                queued.environment[i].rgba = (*queued.lit)[i].rgba;
+        }
         g_queue.push_back(std::move(queued));
     }
 
@@ -646,7 +686,7 @@ namespace con::world
         for (const bool late : {false, true}) {
             for (const Queued &queued : g_queue)
                 if (queued.mesh->late == late && !queued.mesh->vertices.empty()) {
-                    const auto &vertices = queued.shaded.empty() ? queued.mesh->vertices : queued.shaded;
+                    const auto &vertices = queued.lit ? *queued.lit : queued.shaded.empty() ? queued.mesh->vertices : queued.shaded;
                     if (!queued.environment.empty() && g_environment) {
                         bozo::render::Material environment;
                         environment.tex0 = g_environment->key;
