@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -23,6 +24,9 @@ namespace con::particles
         constexpr uint32_t kDrawPS = 0x00185c38u, kDrawSingleParticles = 0x001820f8u, kDrawLines = 0x00184cd8u;
         constexpr uint32_t kLines = 0x006f4880u, kLineSize = 0x24u, kMaxLines = 0x80u;
         constexpr int32_t kLineCount = -0xff4;
+        constexpr uint32_t kDrawDistortion = 0x00181758u, kDistortionLists = 0x0037f7f0u, kJitter = 0x006ffe60u;
+        constexpr int32_t kDistortionBudget = 100;
+        constexpr float kDistortionNear = 20.0f, kDistortionGuardX = 700.0f, kDistortionGuardY = 300.0f;
         constexpr float kLineNear = 20.0f, kLineGuardX = 1400.0f, kLineGuardY = 1000.0f;
         constexpr uint32_t kView = 0x0037ef00u, kFaceRecords = 0x006ec880u;
         constexpr int32_t kFaceCount = -0xff8;
@@ -197,7 +201,7 @@ namespace con::particles
                 const uint32_t data = kPageData + ((page - kPages) << 10);
                 for (uint32_t n = begin; n < end; ++n)
                     if ((n & 31u) && (n & 31u) != 31u && read(rdram, data + n * 16u, now, lifetime, particle))
-                        emit(particle);
+                        emit(particle, n);
                 if (page == tail)
                     break;
                 page = guest<uint32_t>(rdram, page);
@@ -251,6 +255,60 @@ namespace con::particles
             std::memcpy(rdram + ((getRegU32(ctx, 28) + uint32_t(kLineCount)) & kRamMask), &zero, sizeof(zero));
         }
 
+        // Heat haze: each particle's patch of the frame, taken from a jittered spot, drawn back as a fan that fades to its rim.
+        void drawDistortionParticles(uint8_t *rdram, R5900Context *ctx, Runtime *)
+        {
+            ctx->pc = getRegU32(ctx, 31);
+            Matrix m;
+            std::memcpy(m.data(), rdram + kViewProjection, sizeof(m));
+            const uint16_t now = guest<uint16_t>(rdram, kNow);
+            Batch batch;
+            batch.material.sampleTarget = true;
+            batch.material.blend = bozo::render::Material::Blend::Alpha;
+            batch.material.depthWrite = false;
+            int32_t budget = kDistortionBudget;
+            for (uint32_t k = 0; k < 4; ++k)
+                drawList(rdram, kDistortionLists + k * 0x10u, now, std::numeric_limits<int32_t>::max(), [&](const Particle &p, uint32_t n) {
+                    if (budget-- < 0)
+                        return;
+                    const auto field = [&](uint32_t i) { return guest<float>(rdram, p.type + i * 4); };
+                    const auto clip = project(m, p.at(p.age, 0.0f));
+                    const float w = clip[3];
+                    if (w < kDistortionNear || w * kDistortionGuardX < std::fabs(clip[0]) || w * kDistortionGuardY < std::fabs(clip[1]))
+                        return;
+                    const int32_t alpha = std::min(int32_t(field(11) + field(15) * p.age), 0x80);
+                    if (alpha <= 0)
+                        return;
+                    const float iw = 1.0f / w;
+                    const int32_t size = std::clamp(int32_t((field(7) + field(3) * p.age) * 16.0f * iw), 0, 0x1f0);
+                    const int32_t x = int32_t(clip[0] * iw * 16.0f), y = int32_t(clip[1] * iw * 16.0f);
+                    const uint32_t next = (n + 1) & 31u ? n + 1 : n + 3;
+                    const uint32_t jitter = kJitter + (uint32_t(int32_t(float(int32_t(guest<int16_t>(rdram, kNow)) + int32_t(102 * next)) * field(8))) & 0x3fu) * 8u;
+                    const int32_t cells = (size + 15) >> 4, width = cells * 4, height = cells * 2;
+                    const int32_t sx = std::min(std::max(((x - 2 * size) >> 4) + 640 + guest<int32_t>(rdram, jitter), 0), 1278 - width);
+                    const int32_t sy = std::min(std::max(((y - size) >> 4) + 224 + guest<int32_t>(rdram, jitter + 4), 0), 446 - height);
+                    const float cz = clip[2] * iw;
+                    const auto vertex = [&](int32_t dx, int32_t dy, float u, float v, uint32_t a) {
+                        bozo::render::Vertex out;
+                        out.x = float(x + dx * 2 * size) / 16.0f;
+                        out.y = float(y + dy * size) / 16.0f;
+                        out.z = cz;
+                        out.u = float(sx) + u;
+                        out.v = float(sy) + v;
+                        out.rgba = 0x00808080u | a << 24;
+                        return out;
+                    };
+                    const float right = float(width - 1), bottom = float(height - 1);
+                    const auto centre = vertex(0, 0, float(width) * 0.5f, float(height) * 0.5f, uint32_t(alpha));
+                    const std::array<bozo::render::Vertex, 4> rim = {vertex(-1, -1, 1, 1, 0), vertex(1, -1, right, 1, 0),
+                                                                     vertex(1, 1, right, bottom, 0), vertex(-1, 1, 1, bottom, 0)};
+                    for (uint32_t c = 0; c < 4; ++c)
+                        batch.vertices.insert(batch.vertices.end(), {centre, rim[c], rim[(c + 1) % 4]});
+                });
+            if (!batch.vertices.empty())
+                g_batches.push_back(std::move(batch));
+        }
+
         void drawPS(uint8_t *rdram, R5900Context *ctx, Runtime *)
         {
             ctx->pc = getRegU32(ctx, 31);
@@ -273,7 +331,7 @@ namespace con::particles
                 }
                 for (uint32_t k = 0; k < 4; ++k)
                     drawList(rdram, system + pass * 0x40u + k * 0x10u, now, guest<int32_t>(rdram, kLifetimes + k * 4u),
-                             [&](const Particle &p) {
+                             [&](const Particle &p, uint32_t) {
                                  if (pass == 2)
                                      line(rdram, m, p, batch.vertices);
                                  else
@@ -490,6 +548,7 @@ namespace con::particles
         runtime.registerFunction(kDrawPS, &drawPS);
         runtime.registerFunction(kDrawSingleParticles, &drawSingleParticles);
         runtime.registerFunction(kDrawLines, &drawLines);
+        runtime.registerFunction(kDrawDistortion, &drawDistortionParticles);
     }
 
     void submit()
