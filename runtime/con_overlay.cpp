@@ -48,14 +48,6 @@ namespace con::overlay
             return value;
         }
 
-        uint64_t contentKey(const uint8_t *rdram, uint32_t address)
-        {
-            uint64_t hash = 0xcbf29ce484222325ull ^ address;
-            for (uint32_t i = 0; i < 0x20; ++i)
-                hash = (hash ^ rdram[(address + 0x80 + i * 16) & 0x1ffffffu]) * 0x100000001b3ull;
-            return hash;
-        }
-
         void interleaveFields(bozo::render::Texture &texture)
         {
             const std::vector<uint32_t> stacked = texture.rgba;
@@ -72,7 +64,7 @@ namespace con::overlay
             std::memcpy(&flags, rdram + address + 8, 2);
             const bool interleave = (flags & kStoredAsFields) &&
                                     ((gpWord(rdram, ctx, kFieldMode) & 0xff) || gpWord(rdram, ctx, kFullHeightMode));
-            const uint64_t key = contentKey(rdram, address) ^ uint64_t(interleave);
+            const uint64_t key = con::textures::lumpKey(rdram, address) ^ uint64_t(interleave);
             if (const auto found = g_textures.find(key); found != g_textures.end())
                 return found->second;
             auto texture = std::make_shared<bozo::render::Texture>();

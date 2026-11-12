@@ -409,6 +409,14 @@ namespace con::textures
         }
     }
 
+    uint64_t lumpKey(const uint8_t *rdram, uint32_t address)
+    {
+        uint64_t hash = 0xcbf29ce484222325ull ^ address;
+        for (uint32_t i = 0; i < 0x20; ++i)
+            hash = (hash ^ rdram[(address + 0x80 + i * 16) & 0x1ffffffu]) * 0x100000001b3ull;
+        return hash;
+    }
+
     bool decodeLump(const uint8_t *rdram, uint32_t address, bozo::render::Texture &out)
     {
         static const std::array<uint8_t, 256> blockTexels = makeBlockTexels();
