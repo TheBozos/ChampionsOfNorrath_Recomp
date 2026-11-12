@@ -12,7 +12,6 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
-#include <string>
 #include <vector>
 
 namespace con::shadows
@@ -20,8 +19,8 @@ namespace con::shadows
     namespace
     {
         constexpr uint32_t kRamMask = 0x1ffffffu, kMaxJoints = 64, kSurface = 128;
-        constexpr uint32_t kViewProjection = 0x0037ef30u, kView = 0x0037ef00u, kLumps = 0x006cb280u;
-        constexpr int32_t kLumpCount = -0x3a64, kShadowScale = -0x3970, kShadowBrightness = -0x395c;
+        constexpr uint32_t kViewProjection = 0x0037ef30u, kView = 0x0037ef00u;
+        constexpr int32_t kShadowScale = -0x3970, kShadowBrightness = -0x395c;
         constexpr float kSkew = 1.0f / 384.0f, kNudge = 12.0f;
 
         template <typename T>
@@ -30,37 +29,6 @@ namespace con::shadows
             T value;
             std::memcpy(&value, rdram + (address & kRamMask), sizeof(T));
             return value;
-        }
-
-        std::string text(const uint8_t *rdram, uint32_t address)
-        {
-            std::string out;
-            for (uint32_t i = 0; i < 64; ++i) {
-                const char c = char(rdram[(address + i) & kRamMask]);
-                if (!c)
-                    break;
-                out += c;
-            }
-            return out;
-        }
-
-        uint32_t findResource(const uint8_t *rdram, uint32_t gp, const char *lumpName, const char *name)
-        {
-            const int32_t lumps = int32_t(guest<uint32_t>(rdram, gp + uint32_t(kLumpCount)));
-            for (int32_t i = 0; i < lumps && i < 256; ++i) {
-                const uint32_t entry = kLumps + uint32_t(i) * 0x28u;
-                if (text(rdram, entry) != lumpName || (guest<uint32_t>(rdram, entry + 0x14) & 1u))
-                    continue;
-                const uint32_t lump = guest<uint32_t>(rdram, entry + 0x10);
-                if (!lump)
-                    return 0;
-                const uint32_t count = guest<uint16_t>(rdram, lump);
-                for (uint32_t k = 0; k < count; ++k)
-                    if (text(rdram, guest<uint32_t>(rdram, lump + 4 + k * 12)) == name)
-                        return guest<uint32_t>(rdram, lump + 4 + k * 12 + 4);
-                return 0;
-            }
-            return 0;
         }
 
         struct Blob
@@ -74,7 +42,7 @@ namespace con::shadows
 
         const Blob *blob(const uint8_t *rdram, uint32_t gp)
         {
-            const uint32_t lump = findResource(rdram, gp, "engine.lmp", "shadowblob.tex");
+            const uint32_t lump = con::textures::findResource(rdram, gp, "engine.lmp", "shadowblob.tex");
             if (!lump)
                 return nullptr;
             if (lump != g_blob.lump) {

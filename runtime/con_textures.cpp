@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <string>
 #include <utility>
 
 namespace con::textures
@@ -407,6 +408,51 @@ namespace con::textures
                     }
             return table;
         }
+    }
+
+    namespace
+    {
+        constexpr uint32_t kLumps = 0x006cb280u;
+        constexpr int32_t kLumpCount = -0x3a64;
+
+        uint32_t word(const uint8_t *rdram, uint32_t address)
+        {
+            uint32_t value;
+            std::memcpy(&value, rdram + (address & 0x1ffffffu), 4);
+            return value;
+        }
+
+        std::string text(const uint8_t *rdram, uint32_t address)
+        {
+            std::string out;
+            for (uint32_t i = 0; i < 64; ++i) {
+                const char c = char(rdram[(address + i) & 0x1ffffffu]);
+                if (!c)
+                    break;
+                out += c;
+            }
+            return out;
+        }
+    }
+
+    uint32_t findResource(const uint8_t *rdram, uint32_t gp, const char *lumpName, const char *name)
+    {
+        const int32_t lumps = int32_t(word(rdram, gp + uint32_t(kLumpCount)));
+        for (int32_t i = 0; i < lumps && i < 256; ++i) {
+            const uint32_t entry = kLumps + uint32_t(i) * 0x28u;
+            if (text(rdram, entry) != lumpName || (word(rdram, entry + 0x14) & 1u))
+                continue;
+            const uint32_t lump = word(rdram, entry + 0x10);
+            if (!lump)
+                return 0;
+            uint16_t count;
+            std::memcpy(&count, rdram + (lump & 0x1ffffffu), 2);
+            for (uint32_t k = 0; k < count; ++k)
+                if (text(rdram, word(rdram, lump + 4 + k * 12)) == name)
+                    return word(rdram, lump + 4 + k * 12 + 4);
+            return 0;
+        }
+        return 0;
     }
 
     uint64_t lumpKey(const uint8_t *rdram, uint32_t address)

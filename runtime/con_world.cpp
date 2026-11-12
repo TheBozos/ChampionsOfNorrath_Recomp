@@ -27,6 +27,9 @@ namespace con::world
     {
         constexpr uint32_t kRamMask = 0x1ffffffu;
         constexpr uint32_t kLevelName = 0x0037f988u, kViewProjection = 0x0037ef30u;
+        constexpr uint32_t kView = 0x0037ef00u, kScrollingEnvironment = 0x4;
+        constexpr int32_t kLevelOptions = -0x3530, kTick = -0x354c;
+        constexpr float kScreenTerm = 0.07f, kGsOffset = 2048.0f;
         constexpr uint32_t kQuarterTurns = 0x1, kEnvironment = 0x10, kMirrored = 0x40, kLateLayer = 0x200, kAlphaTested = 0x400;
 
         template <typename T>
@@ -47,6 +50,7 @@ namespace con::world
             std::vector<std::array<float, 3>> normals;
             std::array<float, 3> position{};
             uint32_t lighting = 0;
+            bool environment = false;
         };
 
         struct Queued
@@ -54,6 +58,7 @@ namespace con::world
             const Mesh *mesh = nullptr;
             std::vector<bozo::render::Vertex> shaded;
             std::array<float, 16> matrix{};
+            std::vector<bozo::render::Vertex> environment;
         };
 
         struct Unpack
@@ -163,7 +168,7 @@ namespace con::world
         }
 
         void decodePacket(const uint8_t *rdram, const Placement &place, uint32_t at, uint32_t end, float width, float height,
-                          std::vector<bozo::render::Vertex> &out)
+                          std::vector<bozo::render::Vertex> &out, const Normals &normals = {})
         {
             Unpack unpacks[6];
             int found = 0;
@@ -178,7 +183,7 @@ namespace con::world
                         unpacks[found++] = {count, at};
                     at += ((components * bits * count + 31) / 32) * 4;
                     if (found == 6) {
-                        addBatch(rdram, place, unpacks, width, height, out);
+                        addBatch(rdram, place, unpacks, width, height, out, normals);
                         found = 0;
                     }
                 } else if (command == 0x50 || command == 0x51) {
@@ -283,7 +288,7 @@ namespace con::world
                     const uint32_t r = (texel & 0xff) * keep >> 7, g = ((texel >> 8) & 0xff) * keep >> 7, b = ((texel >> 16) & 0xff) * keep >> 7;
                     texel = r | g << 8 | b << 16 | 0x80000000u;
                 } else {
-                    texel |= 0x80000000u;
+                    texel = (texel & 0xffffffu) | alpha << 24;
                 }
             }
             return texture;
@@ -309,13 +314,76 @@ namespace con::world
             material.alphaTest = chunk.flags & kAlphaTested;
             material.alphaRef = 0x51;
             const uint32_t data = guest<uint32_t>(rdram, record);
+            mesh->environment = (chunk.flags & kEnvironment) && !blended;
+            const Turn turn = [&](const std::array<float, 3> &n) -> std::array<float, 3> {
+                const float k = 127.0f / 16.0f;
+                if (!(chunk.flags & kQuarterTurns))
+                    return {n[0] * k, n[1] * k, n[2] * k};
+                const int code = chunk.cosine & 7;
+                const float a = code & 1 ? -n[0] : n[0], b = code & 2 ? -n[1] : n[1];
+                return {(code & 4 ? b : a) * k, (code & 4 ? a : b) * k, n[2] * k};
+            };
             decodePacket(rdram, [&](int16_t x, int16_t y, int16_t z, bozo::render::Vertex &v) { place(chunk, x, y, z, v); }, data, data + guest<uint32_t>(rdram, record + 4) * 16, float(source->width),
-                         float(source->height), mesh->vertices);
+                         float(source->height), mesh->vertices, mesh->environment ? Normals{turn, &mesh->normals} : Normals{});
+            if (mesh->normals.size() != mesh->vertices.size())
+                mesh->environment = false;
             return mesh;
         }
     }
 
     void setDiscImage(const std::string &path) { g_discImage = path; }
+
+    namespace
+    {
+        std::shared_ptr<const bozo::render::Texture> g_environment;
+        uint64_t g_environmentKey = 0;
+
+        const bozo::render::Texture *environmentTexture(const uint8_t *rdram, uint32_t gp)
+        {
+            const uint32_t lump = con::textures::findResource(rdram, gp, "env.lmp", "envtex.etex");
+            if (!lump)
+                return nullptr;
+            const uint64_t key = con::textures::lumpKey(rdram, lump);
+            if (key != g_environmentKey || !g_environment) {
+                g_environment.reset();
+                g_environmentKey = key;
+                auto texture = std::make_shared<bozo::render::Texture>();
+                if (!con::textures::decodeLump(rdram, lump, *texture) || !texture->width || !texture->height)
+                    return nullptr;
+                for (uint32_t &texel : texture->rgba)
+                    texel |= 0x80000000u;
+                texture->key = key ^ 0x454e560000000000ull;
+                texture->version = 1;
+                g_environment = std::move(texture);
+            }
+            return g_environment.get();
+        }
+
+        std::vector<bozo::render::Vertex> environmentVertices(const uint8_t *rdram, uint32_t gp, const Mesh &mesh,
+                                                              const std::array<float, 16> &m)
+        {
+            float view[9];
+            std::memcpy(view, rdram + kView, sizeof(view));
+            const float scroll = guest<uint32_t>(rdram, gp + uint32_t(kLevelOptions)) & kScrollingEnvironment
+                                     ? float(guest<uint32_t>(rdram, gp + uint32_t(kTick)) & 0x3ffu) * 0.25f
+                                     : 0.0f;
+            const float texelU = 1.0f / float(g_environment->width), texelV = 1.0f / float(g_environment->height);
+            std::vector<bozo::render::Vertex> out = mesh.vertices;
+            for (size_t i = 0; i < out.size(); ++i) {
+                auto &v = out[i];
+                const auto &n = mesh.normals[i];
+                const float w = v.x * m[3] + v.y * m[7] + v.z * m[11] + m[15];
+                const float sx = w > 0.0f ? (v.x * m[0] + v.y * m[4] + v.z * m[8] + m[12]) / w : 0.0f;
+                const float sy = w > 0.0f ? (v.x * m[1] + v.y * m[5] + v.z * m[9] + m[13]) / w : 0.0f;
+                const float u = 192.0f + scroll + 6.0f * (n[0] * view[0] + n[1] * view[3] + n[2] * view[6]) + kScreenTerm * (sx + kGsOffset);
+                const float t = 192.0f + 6.0f * (n[0] * view[1] + n[1] * view[4] + n[2] * view[7]) + kScreenTerm * (sy + kGsOffset);
+                v.u = u * texelU;
+                v.v = t * texelV;
+                v.rgba = 0x80808080u;
+            }
+            return out;
+        }
+    }
 
     void drawChunk(const uint8_t *rdram, const R5900Context *ctx)
     {
@@ -339,7 +407,9 @@ namespace con::world
         Queued queued;
         queued.mesh = slot.get();
         std::memcpy(queued.matrix.data(), rdram + kViewProjection, sizeof(queued.matrix));
-        g_queue.push_back(queued);
+        if (slot->environment && environmentTexture(rdram, getRegU32(ctx, 28)))
+            queued.environment = environmentVertices(rdram, getRegU32(ctx, 28), *slot, queued.matrix);
+        g_queue.push_back(std::move(queued));
     }
 
     // A placed model (scenery): its .vif and .tex as the game loaded them, in world space once, drawn with the camera.
@@ -471,6 +541,17 @@ namespace con::world
             for (const Queued &queued : g_queue)
                 if (queued.mesh->late == late && !queued.mesh->vertices.empty()) {
                     const auto &vertices = queued.shaded.empty() ? queued.mesh->vertices : queued.shaded;
+                    if (!queued.environment.empty() && g_environment) {
+                        bozo::render::Material environment;
+                        environment.tex0 = g_environment->key;
+                        environment.blend = bozo::render::Material::Blend::Opaque;
+                        renderer.draw(environment, queued.matrix.data(), queued.environment.data(), uint32_t(queued.environment.size()),
+                                      g_environment);
+                        auto material = queued.mesh->material;
+                        material.blend = bozo::render::Material::Blend::DestinationBySource;
+                        renderer.draw(material, queued.matrix.data(), vertices.data(), uint32_t(vertices.size()), queued.mesh->texture);
+                        continue;
+                    }
                     renderer.draw(queued.mesh->material, queued.matrix.data(), vertices.data(), uint32_t(vertices.size()),
                                   queued.mesh->texture);
                 }
