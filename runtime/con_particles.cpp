@@ -1,0 +1,200 @@
+// The particle systems drawn natively: each live particle of drawPS's lists becomes a camera-facing sprite.
+#include "con_particles.h"
+
+#include "con_textures.h"
+
+#include "bozo/context.h"
+#include "bozo/render/renderer.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <memory>
+#include <vector>
+
+namespace con::particles
+{
+    namespace
+    {
+        constexpr uint32_t kRamMask = 0x1ffffffu;
+        constexpr uint32_t kDrawPS = 0x00185c38u;
+        constexpr uint32_t kMainSystem = 0x0037f730u, kViewProjection = 0x0037ef30u, kLifetimes = 0x0037f720u;
+        constexpr uint32_t kPages = 0x00780080u, kPageData = 0x00700080u, kTypes = 0x00780300u, kNow = 0x004869f4u;
+        constexpr uint32_t kAtlasMap = 0x006ec800u;
+        constexpr uint32_t kLocalMatrix = 0x100u;
+        constexpr int32_t kGeneration = -0x3a68;
+        constexpr float kColourBias = 8388608.0f;
+
+        template <typename T>
+        T guest(const uint8_t *rdram, uint32_t address)
+        {
+            T value;
+            std::memcpy(&value, rdram + (address & kRamMask), sizeof(T));
+            return value;
+        }
+
+        struct Batch
+        {
+            bozo::render::Material material;
+            std::vector<bozo::render::Vertex> vertices;
+        };
+
+        std::vector<Batch> g_batches;
+        std::shared_ptr<const bozo::render::Texture> g_atlas;
+        uint32_t g_atlasLump = 0;
+
+        const bozo::render::Texture *atlas(const uint8_t *rdram, const R5900Context *ctx)
+        {
+            const uint32_t generation = guest<uint32_t>(rdram, getRegU32(ctx, 28) + uint32_t(kGeneration));
+            if (guest<uint32_t>(rdram, kAtlasMap) != generation)
+                return nullptr;
+            const uint32_t lump = guest<uint32_t>(rdram, kAtlasMap + 0xc);
+            if (!lump)
+                return nullptr;
+            if (lump != g_atlasLump || !g_atlas) {
+                g_atlas.reset();
+                g_atlasLump = lump;
+                bozo::render::Texture decoded;
+                if (!con::textures::decodeLump(rdram, lump, decoded) || !decoded.width || !decoded.height)
+                    return nullptr;
+                decoded.key = 0x5041525400000000ull | lump;
+                decoded.version = 1;
+                g_atlas = std::make_shared<bozo::render::Texture>(std::move(decoded));
+            }
+            return g_atlas.get();
+        }
+
+        using Matrix = std::array<float, 16>;
+
+        Matrix systemMatrix(const uint8_t *rdram, uint32_t system)
+        {
+            Matrix view;
+            std::memcpy(view.data(), rdram + kViewProjection, sizeof(view));
+            if (system == kMainSystem)
+                return view;
+            std::array<float, 12> local;
+            std::memcpy(local.data(), rdram + ((system + kLocalMatrix) & kRamMask), sizeof(local));
+            Matrix out{};
+            for (uint32_t row = 0; row < 4; ++row)
+                for (uint32_t j = 0; j < 4; ++j) {
+                    float sum = row == 3 ? view[12 + j] : 0.0f;
+                    for (uint32_t k = 0; k < 3; ++k)
+                        sum += local[row * 3 + k] * view[k * 4 + j];
+                    out[row * 4 + j] = sum;
+                }
+            return out;
+        }
+
+        uint8_t channel(float value, bool biased)
+        {
+            const float c = std::floor(biased ? value - kColourBias : value);
+            return uint8_t(std::clamp(c, 0.0f, 255.0f));
+        }
+
+        void sprite(const uint8_t *rdram, const Matrix &m, uint32_t slot, uint16_t now, int32_t lifetime, float width,
+                    float height, std::vector<bozo::render::Vertex> &out)
+        {
+            const int16_t x = guest<int16_t>(rdram, slot), y = guest<int16_t>(rdram, slot + 2),
+                          z = guest<int16_t>(rdram, slot + 4);
+            const uint16_t age = uint16_t(now - guest<uint16_t>(rdram, slot + 6));
+            if (int32_t(age) > lifetime)
+                return;
+            const uint32_t type = kTypes + ((guest<uint16_t>(rdram, slot + 14) >> 2) & 31u) * 0x40u;
+            const auto field = [&](uint32_t i) { return guest<float>(rdram, type + i * 4); };
+            const float t = float(age);
+            const float vx = float(guest<int16_t>(rdram, slot + 8)) / 256.0f, vy = float(guest<int16_t>(rdram, slot + 10)) / 256.0f,
+                        vz = float(guest<int16_t>(rdram, slot + 12)) / 256.0f;
+            const std::array<float, 3> p{float(x) + vx * t / 16.0f, float(y) + vy * t / 16.0f,
+                                         float(z) + vz * t / 16.0f + field(2) * t * t};
+            std::array<float, 4> clip{};
+            for (uint32_t j = 0; j < 4; ++j)
+                clip[j] = p[0] * m[j] + p[1] * m[4 + j] + p[2] * m[8 + j] + m[12 + j];
+            if (clip[3] <= 1.0f)
+                return;
+            const float size = field(7) + field(3) * t;
+            if (size <= 0.0f)
+                return;
+            std::array<uint8_t, 4> rgba{};
+            for (uint32_t c = 0; c < 4; ++c)
+                rgba[c] = channel(field(8 + c) + field(12 + c) * t, true);
+            if (!rgba[3])
+                return;
+            const float iw = 1.0f / clip[3];
+            const float cx = clip[0] * iw, cy = clip[1] * iw, cz = clip[2] * iw, hx = 2.0f * size * iw, hy = size * iw;
+            const float u0 = float(guest<int32_t>(rdram, type)) / (16.0f * width),
+                        v0 = float(guest<int32_t>(rdram, type + 4)) / (16.0f * height),
+                        u1 = float(guest<int32_t>(rdram, type + 16)) / (16.0f * width),
+                        v1 = float(guest<int32_t>(rdram, type + 20)) / (16.0f * height);
+            const uint32_t colour = uint32_t(rgba[0]) | uint32_t(rgba[1]) << 8 | uint32_t(rgba[2]) << 16 | uint32_t(rgba[3]) << 24;
+            const auto corner = [&](float sx, float sy, float u, float v) {
+                bozo::render::Vertex vertex;
+                vertex.x = cx + sx * hx;
+                vertex.y = cy + sy * hy;
+                vertex.z = cz;
+                vertex.u = u;
+                vertex.v = v;
+                vertex.rgba = colour;
+                return vertex;
+            };
+            const auto a = corner(-1, -1, u0, v0), b = corner(1, -1, u1, v0), c = corner(1, 1, u1, v1), d = corner(-1, 1, u0, v1);
+            out.insert(out.end(), {a, b, c, a, c, d});
+        }
+
+        void drawList(const uint8_t *rdram, const Matrix &m, uint32_t list, uint16_t now, int32_t lifetime, float width,
+                      float height, std::vector<bozo::render::Vertex> &out)
+        {
+            const uint32_t head = guest<uint32_t>(rdram, list), tail = guest<uint32_t>(rdram, list + 4);
+            const uint32_t first = guest<uint32_t>(rdram, list + 8), count = guest<uint32_t>(rdram, list + 12);
+            uint32_t page = head;
+            for (uint32_t guard = 0; page && guard < 4096; ++guard) {
+                const uint32_t begin = page == head ? first : 0, end = page == tail ? std::min(count, 0x100u) : 0x100u;
+                const uint32_t data = kPageData + ((page - kPages) << 10);
+                for (uint32_t n = begin; n < end; ++n)
+                    if ((n & 31u) && (n & 31u) != 31u)
+                        sprite(rdram, m, data + n * 16u, now, lifetime, width, height, out);
+                if (page == tail)
+                    break;
+                page = guest<uint32_t>(rdram, page);
+            }
+        }
+
+        void drawPS(uint8_t *rdram, R5900Context *ctx, Runtime *)
+        {
+            ctx->pc = getRegU32(ctx, 31);
+            const auto *texture = atlas(rdram, ctx);
+            if (!texture)
+                return;
+            const uint32_t system = getRegU32(ctx, 5);
+            const Matrix m = systemMatrix(rdram, system);
+            const uint16_t now = guest<uint16_t>(rdram, kNow);
+            const float width = float(texture->width), height = float(texture->height);
+            for (uint32_t pass = 0; pass < 2; ++pass) {
+                Batch batch;
+                batch.material.tex0 = texture->key;
+                batch.material.blend = pass ? bozo::render::Material::Blend::Additive : bozo::render::Material::Blend::Alpha;
+                batch.material.depthWrite = false;
+                batch.material.nearest = true;
+                for (uint32_t k = 0; k < 4; ++k)
+                    drawList(rdram, m, system + pass * 0x40u + k * 0x10u, now, guest<int32_t>(rdram, kLifetimes + k * 4u),
+                             width, height, batch.vertices);
+                if (!batch.vertices.empty())
+                    g_batches.push_back(std::move(batch));
+            }
+        }
+    }
+
+    void install(bozo::port::Registry &runtime) { runtime.registerFunction(kDrawPS, &drawPS); }
+
+    void submit()
+    {
+        static constexpr float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        auto &renderer = bozo::render::Renderer::instance();
+        for (const Batch &batch : g_batches)
+            renderer.draw(batch.material, kIdentity, batch.vertices.data(), uint32_t(batch.vertices.size()), g_atlas);
+    }
+
+    size_t pending() { return g_batches.size(); }
+
+    void clear() { g_batches.clear(); }
+}
