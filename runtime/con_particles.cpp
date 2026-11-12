@@ -27,7 +27,10 @@ namespace con::particles
         constexpr size_t kMaxFaceTextures = 256;
         constexpr uint32_t kMainSystem = 0x0037f730u, kViewProjection = 0x0037ef30u, kLifetimes = 0x0037f720u;
         constexpr uint32_t kPages = 0x00780080u, kPageData = 0x00700080u, kTypes = 0x00780300u, kNow = 0x004869f4u;
-        constexpr uint32_t kAtlasMap = 0x006ec800u;
+        constexpr uint32_t kAtlasMap = 0x006ec800u, kTrailMap = 0x006ec810u;
+        constexpr uint32_t kTrails = 0x00780b00u, kTrailRows = 0x0037f930u;
+        constexpr uint8_t kTrailPairs = 0x2, kTrailAdditive = 0x4, kTrailMultiply = 0x8;
+        constexpr float kGuardX = 800.0f, kGuardY = 400.0f;
         constexpr uint32_t kLocalMatrix = 0x100u;
         constexpr int32_t kGeneration = -0x3a68;
         constexpr float kColourBias = 8388608.0f;
@@ -54,7 +57,7 @@ namespace con::particles
             uint32_t lump = 0;
         };
 
-        Mapped g_atlas;
+        Mapped g_atlas, g_trail;
 
         const bozo::render::Texture *mapped(const uint8_t *rdram, const R5900Context *ctx, uint32_t map, Mapped &cache)
         {
@@ -344,6 +347,112 @@ namespace con::particles
             for (auto it = open.rbegin(); it != open.rend(); ++it)
                 if (g_batches[it->second].vertices.empty())
                     g_batches.erase(g_batches.begin() + std::ptrdiff_t(it->second));
+        }
+    }
+
+    void drawTrails(const uint8_t *rdram, const R5900Context *ctx)
+    {
+        const auto *texture = mapped(rdram, ctx, kTrailMap, g_trail);
+        if (!texture)
+            return;
+        Matrix m;
+        std::memcpy(m.data(), rdram + kViewProjection, sizeof(m));
+        const float texelU = 1.0f / float(texture->width), texelV = 1.0f / float(texture->height);
+        struct Edge
+        {
+            std::array<float, 4> clip{};
+            bool visible = false;
+            float u = 0.0f;
+            uint32_t alpha = 0;
+        };
+        for (uint32_t slot = 0; slot < 64; ++slot) {
+            const uint32_t e = kTrails + slot * 0x410u;
+            if (!guest<int16_t>(rdram, e + 0x400))
+                continue;
+            const uint32_t read = guest<uint8_t>(rdram, e + 0x404), write = guest<uint8_t>(rdram, e + 0x405);
+            if (read == write)
+                continue;
+            const uint8_t flags = guest<uint8_t>(rdram, e + 0x407);
+            const bool pairs = flags & kTrailPairs;
+            const int32_t row = guest<int8_t>(rdram, e + 0x406);
+            const float lifetime = float(guest<int16_t>(rdram, e + 0x408)), clock = float(guest<int16_t>(rdram, e + 0x402));
+            if (lifetime <= 0.0f)
+                continue;
+            const float top = guest<float>(rdram, kTrailRows + uint32_t(row) * 4u);
+            const float v0 = (top + 0.5f) * texelV, v1 = (guest<float>(rdram, kTrailRows + uint32_t(row + 1) * 4u) - 0.5f) * texelV;
+            const float width = float(guest<uint8_t>(rdram, e + 0x40f)) * 40.0f;
+            const uint32_t colour = guest<uint32_t>(rdram, e + 0x40a);
+            const auto point = [&](uint32_t index) {
+                const uint32_t at = e + (index & 0x7fu) * 8u;
+                std::array<float, 3> p{};
+                for (uint32_t k = 0; k < 3; ++k)
+                    p[k] = float(guest<int16_t>(rdram, at + k * 2)) * 0.5f;
+                return std::make_pair(project(m, p), guest<int16_t>(rdram, at + 6));
+            };
+            const auto u = [&](int16_t stamp) { return (clock - float(stamp)) * (128.0f / lifetime) * texelU; };
+            Batch batch;
+            batch.texture = g_trail.texture;
+            batch.material.tex0 = texture->key;
+            batch.material.blend = flags & kTrailMultiply ? bozo::render::Material::Blend::DestinationBySource
+                                   : flags & kTrailAdditive ? bozo::render::Material::Blend::Additive
+                                                            : bozo::render::Material::Blend::Alpha;
+            batch.material.depthWrite = false;
+            const uint32_t start = read & 0xfeu, count = (write - start) & 0x7fu;
+            std::vector<std::array<bozo::render::Vertex, 2>> edges;
+            std::vector<bool> drawn;
+            const auto vertex = [&](const std::array<float, 4> &c, float ox, float oy, float tu, float tv, uint32_t rgba) {
+                bozo::render::Vertex out;
+                out.x = c[0] / c[3] + ox;
+                out.y = c[1] / c[3] + oy;
+                out.z = c[2] / c[3];
+                out.u = tu;
+                out.v = tv;
+                out.rgba = rgba;
+                return out;
+            };
+            if (pairs) {
+                for (uint32_t k = 0; k + 1 < count; k += 2) {
+                    const auto [base, stamp] = point(start + k);
+                    const auto [tip, alpha] = point(start + k + 1);
+                    const bool visible = base[3] > 1.0f && tip[3] > 1.0f;
+                    const uint32_t rgba = (colour & 0x00ffffffu) | uint32_t(uint16_t(alpha) & 0xffu) << 24;
+                    edges.push_back(visible ? std::array<bozo::render::Vertex, 2>{vertex(base, 0, 0, u(stamp), v0, rgba),
+                                                                                   vertex(tip, 0, 0, u(stamp), v1, rgba)}
+                                            : std::array<bozo::render::Vertex, 2>{});
+                    drawn.push_back(visible);
+                }
+            } else {
+                std::vector<std::pair<std::array<float, 4>, int16_t>> points;
+                for (uint32_t k = 0; k < count; ++k)
+                    points.push_back(point(start + k));
+                for (uint32_t k = 0; k < count; ++k) {
+                    const auto &[c, stamp] = points[k];
+                    const auto &other = points[k ? k - 1 : std::min(k + 1, count - 1)].first;
+                    const bool visible = c[3] > 1.0f && other[3] > 1.0f;
+                    if (!visible) {
+                        edges.push_back({});
+                        drawn.push_back(false);
+                        continue;
+                    }
+                    float dx = (c[0] / c[3] - other[0] / other[3]) / kGuardX, dy = (c[1] / c[3] - other[1] / other[3]) / kGuardY;
+                    if (!k) {
+                        dx = -dx;
+                        dy = -dy;
+                    }
+                    const float length = std::sqrt(dx * dx + dy * dy);
+                    const float scale = length > 0.0f ? width / (c[3] * length) : 0.0f;
+                    const float ox = 2.0f * dy * scale, oy = -dx * scale;
+                    edges.push_back({vertex(c, ox, oy, u(stamp), v0, colour), vertex(c, -ox, -oy, u(stamp), v1, colour)});
+                    drawn.push_back(true);
+                }
+            }
+            for (size_t k = 1; k < edges.size(); ++k)
+                if (drawn[k] && drawn[k - 1]) {
+                    const auto &a = edges[k - 1], &b = edges[k];
+                    batch.vertices.insert(batch.vertices.end(), {a[0], a[1], b[0], a[1], b[0], b[1]});
+                }
+            if (!batch.vertices.empty())
+                g_batches.push_back(std::move(batch));
         }
     }
 
