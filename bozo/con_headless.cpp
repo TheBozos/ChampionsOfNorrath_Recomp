@@ -97,6 +97,7 @@ int main(int argc, char **argv)
         return 2;
     }
     con::audio::attach(host.libraries());
+    host.libraries().softDouble = true;
     con::world::setDiscImage(opt.iso);
     std::printf("con-headless: %s, %zu overrides, ELF %s, disc %s\n", port->title, registry.functions().size(),
                 opt.elf.c_str(), opt.iso.c_str());
