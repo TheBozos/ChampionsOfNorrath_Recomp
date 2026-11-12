@@ -48,28 +48,33 @@ namespace con::particles
         };
 
         std::vector<Batch> g_batches;
-        std::shared_ptr<const bozo::render::Texture> g_atlas;
-        uint32_t g_atlasLump = 0;
+        struct Mapped
+        {
+            std::shared_ptr<const bozo::render::Texture> texture;
+            uint32_t lump = 0;
+        };
 
-        const bozo::render::Texture *atlas(const uint8_t *rdram, const R5900Context *ctx)
+        Mapped g_atlas;
+
+        const bozo::render::Texture *mapped(const uint8_t *rdram, const R5900Context *ctx, uint32_t map, Mapped &cache)
         {
             const uint32_t generation = guest<uint32_t>(rdram, getRegU32(ctx, 28) + uint32_t(kGeneration));
-            if (guest<uint32_t>(rdram, kAtlasMap) != generation)
+            if (guest<uint32_t>(rdram, map) != generation)
                 return nullptr;
-            const uint32_t lump = guest<uint32_t>(rdram, kAtlasMap + 0xc);
+            const uint32_t lump = guest<uint32_t>(rdram, map + 0xc);
             if (!lump)
                 return nullptr;
-            if (lump != g_atlasLump || !g_atlas) {
-                g_atlas.reset();
-                g_atlasLump = lump;
+            if (lump != cache.lump || !cache.texture) {
+                cache.texture.reset();
+                cache.lump = lump;
                 bozo::render::Texture decoded;
                 if (!con::textures::decodeLump(rdram, lump, decoded) || !decoded.width || !decoded.height)
                     return nullptr;
                 decoded.key = 0x5041525400000000ull | lump;
                 decoded.version = 1;
-                g_atlas = std::make_shared<bozo::render::Texture>(std::move(decoded));
+                cache.texture = std::make_shared<bozo::render::Texture>(std::move(decoded));
             }
-            return g_atlas.get();
+            return cache.texture.get();
         }
 
         using Matrix = std::array<float, 16>;
@@ -219,7 +224,7 @@ namespace con::particles
         void drawPS(uint8_t *rdram, R5900Context *ctx, Runtime *)
         {
             ctx->pc = getRegU32(ctx, 31);
-            const auto *texture = atlas(rdram, ctx);
+            const auto *texture = mapped(rdram, ctx, kAtlasMap, g_atlas);
             if (!texture)
                 return;
             const uint32_t system = getRegU32(ctx, 5);
@@ -243,7 +248,7 @@ namespace con::particles
                                      sprite(rdram, m, p, width, height, batch.vertices);
                              });
                 if (pass != 2)
-                    batch.texture = g_atlas;
+                    batch.texture = g_atlas.texture;
                 if (!batch.vertices.empty())
                     g_batches.push_back(std::move(batch));
             }
