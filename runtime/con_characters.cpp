@@ -24,7 +24,8 @@ namespace con::characters
         constexpr uint32_t kRamMask = 0x1ffffffu, kMaxJoints = 64, kEnvironmentProgram = 0x44;
         // matMakeCharViewMatrix scales the depth row by 16 x 2^46 over matMakeViewMatrix's.
         constexpr float kCharacterDepth = 1.0f / 1125899906842624.0f;
-        constexpr int32_t kModelOptions = -0x3964;
+        constexpr int32_t kModelOptions = -0x3964, kHaloDef = -0x396c, kHaloLayers = -0x3968;
+        constexpr uint16_t kShellModel = 0x20;
         constexpr uint32_t kNoDepthWrite = 0x1, kNoColourWrite = 0x8, kNoDepthTest = 0x20;
 
         template <typename T>
@@ -39,6 +40,7 @@ namespace con::characters
         {
             std::array<float, 3> position{};
             std::array<float, 3> normal{};
+            std::array<float, 3> shell{};
             std::array<uint8_t, 4> joint{};
             std::array<float, 4> weight{};
             uint8_t joints = 0;
@@ -70,7 +72,7 @@ namespace con::characters
             if (u.size() < 6)
                 return;
             const Unpack &positions = u[0], &rows = u[2];
-            const Unpack *weights = nullptr, *copies = nullptr, *tags = nullptr;
+            const Unpack *weights = nullptr, *copies = nullptr, *tags = nullptr, *shells = nullptr;
             for (size_t i = 3; i < u.size(); ++i) {
                 const uint32_t kind = u[i].command & 0xf;
                 if (kind == 0xe && !weights && !copies)
@@ -79,6 +81,8 @@ namespace con::characters
                     copies = &u[i];
                 else if (kind == 0xc && copies && !tags)
                     tags = &u[i];
+                else if (kind == 0xa && tags && !shells)
+                    shells = &u[i];
             }
             if (!copies || !tags)
                 return;
@@ -91,6 +95,9 @@ namespace con::characters
                 if (i < normals.count)
                     for (int k = 0; k < 3; ++k)
                         s.normal[size_t(k)] = float(guest<int8_t>(rdram, normals.data + i * 3 + uint32_t(k))) / 127.0f;
+                if (shells && i < shells->count)
+                    for (int k = 0; k < 3; ++k)
+                        s.shell[size_t(k)] = float(guest<int8_t>(rdram, shells->data + i * 3 + uint32_t(k)));
                 model.vertices.push_back(s);
             }
             if (weights) {
@@ -472,7 +479,52 @@ namespace con::characters
                 }
             }
         }
-        for (Draw *draw : {&e, &d}) {
+        Draw halo;
+        const uint32_t haloDef = guest<uint32_t>(rdram, gp + uint32_t(kHaloDef));
+        const int32_t haloLayers = int32_t(guest<uint32_t>(rdram, gp + uint32_t(kHaloLayers)));
+        if ((guest<uint16_t>(rdram, vif + 0x10) & kShellModel) && haloDef && haloLayers > 0) {
+            halo.texture = texture;
+            halo.material = painted->material;
+            halo.material.blend = bozo::render::Material::Blend::Additive;
+            halo.material.alphaTest = false;
+            halo.material.depthWrite = false;
+            halo.matrix = matrix;
+            for (int32_t layer = 0; layer < std::min(haloLayers, 8); ++layer) {
+                const uint32_t record = haloDef + uint32_t(layer) * 8u;
+                const uint32_t colour = guest<uint32_t>(rdram, record);
+                const float push = guest<float>(rdram, record + 4) / 32768.0f;
+                std::vector<Vec3> shell(model->vertices.size());
+                for (size_t i = 0; i < model->vertices.size(); ++i) {
+                    const Skinned &s = model->vertices[i];
+                    const Vec3 at{s.position[0] + s.shell[0] * push, s.position[1] + s.shell[1] * push, s.position[2] + s.shell[2] * push};
+                    Vec3 out{};
+                    const uint8_t used = s.joints ? s.joints : 1;
+                    for (uint8_t k = 0; k < used; ++k) {
+                        const Joint &j = joints[std::min<uint32_t>(s.joint[k], kMaxJoints - 1)];
+                        const float w = s.joints ? s.weight[k] : 1.0f;
+                        for (int row = 0; row < 3; ++row)
+                            out[size_t(row)] += w * (j.r[row][0] * at[0] + j.r[row][1] * at[1] + j.r[row][2] * at[2] + j.t[row]);
+                    }
+                    shell[i] = out;
+                }
+                for (size_t i = 0; i < model->corners.size(); i += 3) {
+                    if (!(shown >> model->meshOfCorner[i] & 1))
+                        continue;
+                    for (size_t k = 0; k < 3; ++k) {
+                        const Corner &c = model->corners[i + k];
+                        bozo::render::Vertex v;
+                        v.x = shell[c.vertex][0];
+                        v.y = shell[c.vertex][1];
+                        v.z = shell[c.vertex][2];
+                        v.u = c.u / width;
+                        v.v = c.v / height;
+                        v.rgba = colour;
+                        halo.vertices.push_back(v);
+                    }
+                }
+            }
+        }
+        for (Draw *draw : {&e, &d, &halo}) {
             draw->background = style.background;
             if (style.options & kNoDepthWrite)
                 draw->material.depthWrite = false;
@@ -485,6 +537,8 @@ namespace con::characters
             g_draws.push_back(std::move(e));
         if (!d.vertices.empty())
             g_draws.push_back(std::move(d));
+        if (!halo.vertices.empty())
+            g_draws.push_back(std::move(halo));
     }
     }
 
