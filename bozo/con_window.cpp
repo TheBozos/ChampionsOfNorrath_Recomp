@@ -176,8 +176,10 @@ int main(int argc, char **argv)
     bool scripted = !opt.padScript.empty();
     for (const std::string &script : opt.playerScripts)
         scripted = scripted || !script.empty();
-    if (!scripted)
+    if (!scripted) {
         host.libraries().pad.input = &pad;
+        host.libraries().cd.hostClock = true;
+    }
     const std::string pads = scripted ? std::string("the scripts") : "the PC's devices (" + bozo::app::input::configPath() + ")";
     std::fprintf(stderr, "con: user folder %s, memory cards in %s, pads from %s\n", bozo::app::userDirectory().string().c_str(),
                  opt.cardDir.empty() ? "memory" : opt.cardDir.c_str(), pads.c_str());
