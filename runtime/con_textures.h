@@ -32,6 +32,7 @@ namespace con::textures
     bool decodeLump(const uint8_t *rdram, uint32_t address, bozo::render::Texture &out);
 
     uint64_t lumpKey(const uint8_t *rdram, uint32_t address);
+    uint32_t findResource(const uint8_t *rdram, uint32_t gp, const char *lumpName, const char *name);
 
     // A model's GS ALPHA register value (its .vif header +0x18) as the renderer's blend: the texture's alpha is turned the
     // way that blend reads it.
