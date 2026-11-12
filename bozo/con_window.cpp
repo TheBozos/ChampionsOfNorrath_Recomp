@@ -172,6 +172,7 @@ int main(int argc, char **argv)
         return 2;
     }
     con::audio::attach(host.libraries());
+    host.libraries().softDouble = true;
     bozo::app::DevicePad pad;
     bool scripted = !opt.padScript.empty();
     for (const std::string &script : opt.playerScripts)
