@@ -436,9 +436,9 @@ namespace con::world
         g_queue.push_back(std::move(queued));
     }
 
-    void endFrame()
+    void endFrame(uint32_t clearColour)
     {
-        if (g_queue.empty() && !g_published && !con::characters::pending() && !con::particles::pending() && !con::shadows::pending())
+        if (g_queue.empty() && !(clearColour & 0x00ffffffu) && !g_published && !con::characters::pending() && !con::particles::pending() && !con::shadows::pending())
             return;
         auto &renderer = bozo::render::Renderer::instance();
         bozo::render::Screen screen;
@@ -448,6 +448,25 @@ namespace con::world
         screen.height = 448.0f;
         screen.depthMax = 4096.0f;
         renderer.beginFrame(screen);
+        if (clearColour & 0x00ffffffu) {
+            static constexpr float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            bozo::render::Material material;
+            material.textured = false;
+            material.directColour = true;
+            material.blend = bozo::render::Material::Blend::Opaque;
+            material.depthTest = false;
+            material.depthWrite = false;
+            const auto corner = [&](float x, float y) {
+                bozo::render::Vertex vertex;
+                vertex.x = x;
+                vertex.y = y;
+                vertex.rgba = (clearColour & 0x00ffffffu) | 0x80000000u;
+                return vertex;
+            };
+            const bozo::render::Vertex quad[6] = {corner(-640, -224), corner(640, -224), corner(-640, 224),
+                                                  corner(640, -224), corner(640, 224), corner(-640, 224)};
+            renderer.draw(material, kIdentity, quad, 6u);
+        }
         for (const bool late : {false, true}) {
             for (const Queued &queued : g_queue)
                 if (queued.mesh->late == late && !queued.mesh->vertices.empty()) {

@@ -117,7 +117,7 @@ namespace con::graphics
             return true;
         }
 
-        constexpr uint32_t kDrawWaitFinished = 0x0015faa0u;
+        constexpr uint32_t kDrawWaitFinished = 0x0015faa0u, kClearColour = 0x1374u;
 
         bozo::app::FramePacer g_pacer;
         uint64_t g_frameEndCycle = 0;
@@ -148,7 +148,9 @@ namespace con::graphics
         {
             if (bozo::port::realTime(rt))
                 holdToRealTime(ctx, rt);
-            con::world::endFrame();
+            uint32_t clearColour;
+            std::memcpy(&clearColour, rdram + ((getRegU32(ctx, 28) - kClearColour) & 0x1ffffffu), 4);
+            con::world::endFrame(clearColour);
             con::overlay::endFrame(rdram, ctx);
             bozo::port::frameEnd(rt, ctx);
             g_frameEndCycle = bozo::port::now(rt);
