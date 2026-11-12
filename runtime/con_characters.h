@@ -9,7 +9,7 @@ namespace con::characters
 {
     void draw(const uint8_t *rdram, const R5900Context *ctx);
     void drawAttachment(const uint8_t *rdram, const R5900Context *ctx);
-    void submit();
+    void submit(bool background);
     size_t pending();
     void clear();
 }
