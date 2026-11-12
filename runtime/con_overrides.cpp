@@ -1,4 +1,5 @@
 #include "con_particles.h"
+#include "con_water.h"
 
 #include "bozo/context.h"
 #include "bozo/port.h"
@@ -25,6 +26,7 @@ namespace
 {
     constexpr uint32_t kConEntry = 0x00100008u;
     constexpr uint32_t kInitVif = 0x0018F118u;
+    constexpr uint32_t kWaterStep = 0x00187798u;
 
     constexpr uint32_t kLgKbMInit = 0x002E6ED0u;
     constexpr uint32_t kLgAudEnumHint = 0x002EA150u;
@@ -66,12 +68,20 @@ namespace
         returnFrom(ctx, 0);
     }
 
+    // The game's MMI loop keeps data in $sp, so an interrupt taken inside it would find no stack.
+    void waterStep(uint8_t *rdram, R5900Context *ctx, Runtime *)
+    {
+        con::water::step(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6));
+        ctx->pc = getRegU32(ctx, 31);
+    }
+
     void install(bozo::port::Registry &runtime)
     {
         con::graphics::install(runtime);
         con::overlay::install(runtime);
         con::vu0::install(runtime);
         con::particles::install(runtime);
+        runtime.registerFunction(kWaterStep, &waterStep);
         runtime.registerFunction(kInitVif, &returnVoid);
         runtime.registerFunction(kLgKbMInit, &keyboardAbsent);
         runtime.registerFunction(kLgAudEnumHint, &headsetHintNone);
