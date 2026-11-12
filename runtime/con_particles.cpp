@@ -165,6 +165,31 @@ namespace con::particles
             out.insert(out.end(), {a, b, c, a, c, d});
         }
 
+        void line(const uint8_t *rdram, const Matrix &m, const Particle &p, std::vector<bozo::render::Vertex> &out)
+        {
+            const float gravity = guest<float>(rdram, p.type), lag = guest<float>(rdram, p.type + 12);
+            const auto head = project(m, p.at(p.age, gravity)), tail = project(m, p.at(p.age - lag, gravity));
+            if (head[3] <= 1.0f || tail[3] <= 1.0f)
+                return;
+            const uint32_t colour = colourAt(rdram, p.type, p.age);
+            if (!(colour >> 24))
+                return;
+            const float hx = head[0] / head[3], hy = head[1] / head[3], tx = tail[0] / tail[3], ty = tail[1] / tail[3];
+            const float dx = (tx - hx) * 0.5f, dy = ty - hy, length = std::sqrt(dx * dx + dy * dy);
+            const float nx = length > 0.0f ? -dy / length : 0.0f, ny = length > 0.0f ? dx / length : 1.0f;
+            const auto end = [&](float x, float y, float z, float side) {
+                bozo::render::Vertex vertex;
+                vertex.x = x + side * nx;
+                vertex.y = y + side * ny * 0.5f;
+                vertex.z = z;
+                vertex.rgba = colour;
+                return vertex;
+            };
+            const float hz = head[2] / head[3], tz = tail[2] / tail[3];
+            const auto a = end(hx, hy, hz, -1), b = end(hx, hy, hz, 1), c = end(tx, ty, tz, 1), d = end(tx, ty, tz, -1);
+            out.insert(out.end(), {a, b, c, a, c, d});
+        }
+
         template <typename Emit>
         void drawList(const uint8_t *rdram, uint32_t list, uint16_t now, int32_t lifetime, const Emit &emit)
         {
@@ -194,15 +219,22 @@ namespace con::particles
             const Matrix m = systemMatrix(rdram, system);
             const uint16_t now = guest<uint16_t>(rdram, kNow);
             const float width = float(texture->width), height = float(texture->height);
-            for (uint32_t pass = 0; pass < 2; ++pass) {
+            for (uint32_t pass = 0; pass < 3; ++pass) {
                 Batch batch;
-                batch.material.tex0 = texture->key;
+                batch.material.tex0 = pass == 2 ? 0 : texture->key;
+                batch.material.textured = pass != 2;
+                batch.material.directColour = pass == 2;
                 batch.material.blend = pass ? bozo::render::Material::Blend::Additive : bozo::render::Material::Blend::Alpha;
                 batch.material.depthWrite = false;
                 batch.material.nearest = true;
                 for (uint32_t k = 0; k < 4; ++k)
                     drawList(rdram, system + pass * 0x40u + k * 0x10u, now, guest<int32_t>(rdram, kLifetimes + k * 4u),
-                             [&](const Particle &p) { sprite(rdram, m, p, width, height, batch.vertices); });
+                             [&](const Particle &p) {
+                                 if (pass == 2)
+                                     line(rdram, m, p, batch.vertices);
+                                 else
+                                     sprite(rdram, m, p, width, height, batch.vertices);
+                             });
                 if (!batch.vertices.empty())
                     g_batches.push_back(std::move(batch));
             }
@@ -216,7 +248,8 @@ namespace con::particles
         static constexpr float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         auto &renderer = bozo::render::Renderer::instance();
         for (const Batch &batch : g_batches)
-            renderer.draw(batch.material, kIdentity, batch.vertices.data(), uint32_t(batch.vertices.size()), g_atlas);
+            renderer.draw(batch.material, kIdentity, batch.vertices.data(), uint32_t(batch.vertices.size()),
+                          batch.material.textured ? g_atlas : nullptr);
     }
 
     size_t pending() { return g_batches.size(); }
