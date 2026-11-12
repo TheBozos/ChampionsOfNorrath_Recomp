@@ -34,6 +34,7 @@ namespace con::world
         constexpr int32_t kWaterColour2 = -0x3898, kWaterFix2 = -0x38a0, kWaterScale2 = -0x3890, kWaterStep = -0x79a0;
         constexpr uint32_t kWaterSecondSet = 0x1000;
         constexpr float kWaterSlope = 0.0499200001f;
+        constexpr float kCharacterDepth = 1.0f / 1125899906842624.0f;
         constexpr uint32_t kQuarterTurns = 0x1, kEnvironment = 0x10, kMirrored = 0x40, kLateLayer = 0x200, kAlphaTested = 0x400;
 
         template <typename T>
@@ -478,6 +479,8 @@ namespace con::world
         water.material.depthTest = false;
         water.material.depthWrite = false;
         std::memcpy(water.matrix.data(), rdram + kCharacterViewProjection, sizeof(water.matrix));
+        for (const uint32_t i : {2u, 6u, 10u, 14u})
+            water.matrix[i] *= kCharacterDepth;
         for (uint32_t row = 2; row < 32; ++row)
             for (uint32_t column = 0; column < 30; ++column) {
                 const auto a = vertex(row, column), b = vertex(row - 1, column), c = vertex(row, column + 1), d = vertex(row - 1, column + 1);
