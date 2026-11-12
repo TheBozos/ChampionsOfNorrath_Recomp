@@ -22,6 +22,8 @@ namespace con::characters
     namespace
     {
         constexpr uint32_t kRamMask = 0x1ffffffu, kMaxJoints = 64, kEnvironmentProgram = 0x44;
+        // matMakeCharViewMatrix scales the depth row by 16 x 2^46 over matMakeViewMatrix's.
+        constexpr float kCharacterDepth = 1.0f / 1125899906842624.0f;
 
         template <typename T>
         T guest(const uint8_t *rdram, uint32_t address)
@@ -324,6 +326,8 @@ namespace con::characters
         parent.joints = readPose(rdram, state);
         const uint32_t stack = getRegU32(ctx, 29);
         std::memcpy(parent.matrix.data(), rdram + ((stack + 0x20u) & kRamMask), sizeof(parent.matrix));
+        for (const uint32_t i : {2u, 6u, 10u, 14u})
+            parent.matrix[i] *= kCharacterDepth;
         parent.lights = con::lights::forCharacter(rdram, getRegU32(ctx, 28),
                                  {guest<float>(rdram, stack), guest<float>(rdram, stack + 4), guest<float>(rdram, stack + 8)});
         emit(rdram, getRegU32(ctx, 28), vif, tex, getRegU64(ctx, 21), parent.joints, parent.matrix, parent.lights);
