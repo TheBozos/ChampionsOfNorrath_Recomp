@@ -39,7 +39,7 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 | Frame loop on the PC clock, no vblank pacing | 🔧 frames held to the PC clock; the game's vblank waits are still there |
 | Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; drawn on the level's geometry |
 | 3D: native meshes | 🔧 level geometry lit by the level's point lights (torch pools on the floors), scenery models and lit, skinned characters with their equipment and particle sprites (torch fire, embers, glows) draw with the game's camera, spark lines and web strands, heat haze, glow halos and weapon trails included, character shadows and environment-mapped surfaces, water tiles and floor decals (blood pools, splats, scorch marks) |
-| 2D, menus and HUD | 🔧 the game's sprite and font calls drawn natively, menus, dialogs, slider and highlight boxes, cinematic letterbox bars and screen fades show |
+| 2D, menus and HUD | 🔧 the game's sprite and font calls drawn natively, menus, dialogs, slider and highlight boxes, cinematic letterbox bars and screen fades show, and the automap (full screen and corner), with its fog of war, markers and icons |
 | Movies | 🔧 decoded by BozoEngine (libmpeg) and shown as the window's backdrop; not exercised yet |
 | Window | 🔧 runs on a desktop GPU (OpenGL) at 60 game frames a second through character creation, cutscenes and Kelethin; not played by hand yet |
 | Windows build | ⏳ not tried |
