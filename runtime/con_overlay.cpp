@@ -81,16 +81,11 @@ namespace con::overlay
             return texture;
         }
 
-        struct Clip
-        {
-            float x0 = 0.0f, y0 = 0.0f, x1 = 640.0f, y1 = 448.0f;
-        };
-
         struct Pending
         {
             std::shared_ptr<const bozo::render::Texture> texture;
             int32_t layer = 0;
-            bozo::render::Vertex quad[6];
+            std::vector<bozo::render::Vertex> vertices;
         };
 
         std::vector<Pending> g_pending, g_fontPending;
@@ -116,8 +111,8 @@ namespace con::overlay
                 return vertex;
             };
             queue.push_back({texture, layer,
-                                 {corner(left, top, ul, vt), corner(right, top, ur, vt), corner(left, bottom, ul, vb),
-                                  corner(right, top, ur, vt), corner(right, bottom, ur, vb), corner(left, bottom, ul, vb)}});
+                             {corner(left, top, ul, vt), corner(right, top, ur, vt), corner(left, bottom, ul, vb),
+                              corner(right, top, ur, vt), corner(right, bottom, ur, vb), corner(left, bottom, ul, vb)}});
         }
 
         void textureDrawColor(uint8_t *rdram, R5900Context *ctx, Runtime *)
@@ -312,7 +307,7 @@ namespace con::overlay
                 material.depthTest = false;
                 material.depthWrite = false;
                 material.clampU = material.clampV = true;
-                renderer.drawOverlay(material, pending.quad, 6u, pending.texture);
+                renderer.drawOverlay(material, pending.vertices.data(), uint32_t(pending.vertices.size()), pending.texture);
             }
         }
         g_pending.clear();
@@ -323,6 +318,57 @@ namespace con::overlay
         screen.width = 640.0f;
         screen.height = 448.0f;
         renderer.publishOverlay(screen);
+    }
+
+    std::shared_ptr<const bozo::render::Texture> texture(const uint8_t *rdram, const R5900Context *ctx, uint32_t address)
+    {
+        return lookUp(rdram, ctx, address);
+    }
+
+    void queue(int32_t layer, std::shared_ptr<const bozo::render::Texture> texture, std::vector<bozo::render::Vertex> triangles,
+               const Clip &clip)
+    {
+        using bozo::render::Vertex;
+        const auto mix = [](const Vertex &a, const Vertex &b, float t) {
+            Vertex out = a;
+            out.x = a.x + (b.x - a.x) * t;
+            out.y = a.y + (b.y - a.y) * t;
+            out.u = a.u + (b.u - a.u) * t;
+            out.v = a.v + (b.v - a.v) * t;
+            out.rgba = 0;
+            for (uint32_t k = 0; k < 32; k += 8) {
+                const float ca = float((a.rgba >> k) & 0xffu), cb = float((b.rgba >> k) & 0xffu);
+                out.rgba |= uint32_t(std::lround(ca + (cb - ca) * t)) << k;
+            }
+            return out;
+        };
+        const auto cut = [&](std::vector<Vertex> &polygon, auto inside, auto crossing) {
+            std::vector<Vertex> out;
+            for (size_t i = 0; i < polygon.size(); ++i) {
+                const Vertex &a = polygon[i], &b = polygon[(i + 1) % polygon.size()];
+                if (inside(a))
+                    out.push_back(a);
+                if (inside(a) != inside(b))
+                    out.push_back(mix(a, b, crossing(a, b)));
+            }
+            polygon = std::move(out);
+        };
+        std::vector<Vertex> kept;
+        for (size_t t = 0; t + 2 < triangles.size(); t += 3) {
+            std::vector<Vertex> polygon(triangles.begin() + std::ptrdiff_t(t), triangles.begin() + std::ptrdiff_t(t + 3));
+            cut(polygon, [&](const Vertex &v) { return v.x >= clip.x0; }, [&](const Vertex &a, const Vertex &b) { return (clip.x0 - a.x) / (b.x - a.x); });
+            cut(polygon, [&](const Vertex &v) { return v.x <= clip.x1; }, [&](const Vertex &a, const Vertex &b) { return (clip.x1 - a.x) / (b.x - a.x); });
+            cut(polygon, [&](const Vertex &v) { return v.y >= clip.y0; }, [&](const Vertex &a, const Vertex &b) { return (clip.y0 - a.y) / (b.y - a.y); });
+            cut(polygon, [&](const Vertex &v) { return v.y <= clip.y1; }, [&](const Vertex &a, const Vertex &b) { return (clip.y1 - a.y) / (b.y - a.y); });
+            for (size_t i = 1; i + 1 < polygon.size(); ++i)
+                for (const Vertex *v : {&polygon[0], &polygon[i], &polygon[i + 1]}) {
+                    kept.push_back(*v);
+                    kept.back().x += kOriginX;
+                    kept.back().y += kOriginY;
+                }
+        }
+        if (!kept.empty())
+            g_pending.push_back({std::move(texture), layer, std::move(kept)});
     }
 
     void install(bozo::port::Registry &runtime)
