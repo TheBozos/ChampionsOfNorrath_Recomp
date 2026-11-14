@@ -28,6 +28,11 @@ namespace con::movies
     void install(bozo::port::Registry &runtime);
 }
 
+namespace con::automap
+{
+    void install(bozo::port::Registry &runtime);
+}
+
 namespace
 {
     constexpr uint32_t kConEntry = 0x00100008u;
@@ -87,6 +92,7 @@ namespace
         con::overlay::install(runtime);
         con::vu0::install(runtime);
         con::movies::install(runtime);
+        con::automap::install(runtime);
         con::particles::install(runtime);
         con::decals::install(runtime);
         runtime.registerFunction(kWaterStep, &waterStep);
