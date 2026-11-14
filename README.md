@@ -34,7 +34,7 @@ Everything runs native, with no emulated GS, VU or IOP hardware and nothing read
 | EE code recompiled | ✅ |
 | Start-up, memory card, multitap, the front-end, into a hub level | ✅ |
 | VU0 programs as native C++ | ✅ (no reference run to compare against) |
-| The disc's sound modules as native code over native libsd | 🔧 the mixer makes sound from about 18 s in a run; nobody has listened to it |
+| The disc's sound modules as native code over native libsd | 🔧 the mixer makes sound from about 18 s in a run; a 222 s capture of the Kelethin route measures -20 to -30 dBFS, no clipping, real stereo and a full spectrum; nobody has listened to it yet |
 | A window held to real time | 🔧 runs at 60 frames a second, into the hub level Kelethin |
 | Frame loop on the PC clock, no vblank pacing | 🔧 frames held to the PC clock; the game's vblank waits are still there |
 | Textures: native decoder reading the disc image's `.TEX` files at run time | 🔧 all 650,820 decode; drawn on the level's geometry |
